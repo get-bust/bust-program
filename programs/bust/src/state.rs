@@ -338,6 +338,20 @@ impl Vest {
     }
 }
 
+/// Bust's LaunchLab platform. The program's fee wallet PDA claims the platform fee
+#[account]
+#[derive(InitSpace)]
+pub struct LaunchConfig {
+    pub launchpad_program: Pubkey,
+    /// Our PlatformConfig account (platform_claim_fee_wallet = the fee wallet PDA)
+    pub platform_config: Pubkey,
+    pub quote_mint: Pubkey,
+    /// Where claimed fees go when the quote token is not USDC (the swap wallet, a multisig)
+    pub swap_destination: Pubkey,
+    pub bump: u8,
+    pub fee_wallet_bump: u8,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Market {

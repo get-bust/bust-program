@@ -112,6 +112,23 @@ pub mod bust {
         instructions::xbust::handle_convert_vested(ctx)
     }
 
+    // ---------- LaunchLab platform fee (the fee wallet is the program's PDA)
+    pub fn init_launch_config(ctx: Context<InitLaunchConfig>, launchpad_program: Pubkey, platform_config: Pubkey) -> Result<()> {
+        instructions::launchlab::handle_init_launch_config(ctx, launchpad_program, platform_config)
+    }
+
+    pub fn update_launch_config(ctx: Context<UpdateLaunchConfig>, platform_config: Pubkey) -> Result<()> {
+        instructions::launchlab::handle_update_launch_config(ctx, platform_config)
+    }
+
+    pub fn claim_launch_fees<'info>(ctx: Context<'info, ClaimLaunchFees<'info>>, from_vault: bool) -> Result<()> {
+        instructions::launchlab::handle_claim_launch_fees(ctx, from_vault)
+    }
+
+    pub fn sweep_launch_fees(ctx: Context<SweepLaunchFees>) -> Result<()> {
+        instructions::launchlab::handle_sweep_launch_fees(ctx)
+    }
+
     // ---------- accounts and funds
     pub fn create_user(ctx: Context<CreateUser>) -> Result<()> {
         instructions::user::handle_create_user(ctx)
