@@ -263,7 +263,8 @@ impl StakeAccount {
     }
 }
 
-/// xBUST treasury: the $BUST bought for conversion sits here. Rate = treasury $BUST / (xBUST supply + locked xBUST)
+/// xBUST treasury: the $BUST bought for conversion sits here.
+/// Rate = treasury $BUST / (xBUST supply + locked xBUST + funded but unclaimed xBUST)
 #[account]
 #[derive(InitSpace)]
 pub struct Treasury {
@@ -277,6 +278,14 @@ pub struct Treasury {
     pub bump: u8,
     pub tokens_bump: u8,
     pub mint_bump: u8,
+    /// xBUST rights in funded epochs that nobody has claimed yet. Without them in the denominator an early converter
+    /// would also take the backing of losers who have not claimed. Last field: older accounts grow via migrate_treasury
+    pub unclaimed: u64,
+}
+
+impl Treasury {
+    /// Account size before unclaimed was added
+    pub const V1_LEN: usize = 8 + 32 * 3 + 8 + 8 + 3;
 }
 
 /// A closed epoch: total net loss and the $BUST put in the treasury for it (= the xBUST to be minted)

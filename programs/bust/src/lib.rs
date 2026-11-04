@@ -96,6 +96,10 @@ pub mod bust {
         instructions::xbust::handle_update_treasury(ctx, buyback_authority)
     }
 
+    pub fn migrate_treasury(ctx: Context<MigrateTreasury>) -> Result<()> {
+        instructions::xbust::handle_migrate_treasury(ctx)
+    }
+
     pub fn fund_epoch(ctx: Context<FundEpoch>, epoch: u64, amount: u64) -> Result<()> {
         instructions::xbust::handle_fund_epoch(ctx, epoch, amount)
     }

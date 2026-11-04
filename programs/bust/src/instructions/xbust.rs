@@ -49,6 +49,7 @@ pub fn handle_init_treasury(ctx: Context<InitTreasury>, vest_sec: i64, buyback_a
         bust_mint: ctx.accounts.bust_mint.key(),
         buyback_authority,
         total_locked: 0,
+        unclaimed: 0,
         vest_sec,
         bump: ctx.bumps.treasury,
         tokens_bump: ctx.bumps.treasury_tokens,
@@ -71,13 +72,47 @@ pub fn handle_update_treasury(ctx: Context<UpdateTreasury>, buyback_authority: P
     Ok(())
 }
 
+// ---------- migrate_treasury (admin, once: a treasury opened before the unclaimed field existed)
+
+#[derive(Accounts)]
+pub struct MigrateTreasury<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, Config>,
+    /// CHECK: At the old size it cannot be read as an Account; the address is checked by seeds, the owner below
+    #[account(mut, seeds = [TREASURY_SEED], bump)]
+    pub treasury: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Grows the account to the new size; the added field (unclaimed) starts at zero. Fails unless the account is at the old size
+pub fn handle_migrate_treasury(ctx: Context<MigrateTreasury>) -> Result<()> {
+    let info = ctx.accounts.treasury.to_account_info();
+    require_keys_eq!(*info.owner, crate::ID, PerpError::InvalidConfig);
+    require!(info.data_len() == Treasury::V1_LEN, PerpError::InvalidConfig);
+    let new_len = 8 + Treasury::INIT_SPACE;
+    let need = Rent::get()?.minimum_balance(new_len).saturating_sub(info.lamports());
+    if need > 0 {
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.key(),
+                anchor_lang::system_program::Transfer { from: ctx.accounts.admin.to_account_info(), to: info.clone() },
+            ),
+            need,
+        )?;
+    }
+    info.resize(new_len)?;
+    Ok(())
+}
+
 // ---------- fund_epoch (buyback authority only, once per epoch)
 
 #[derive(Accounts)]
 #[instruction(epoch: u64)]
 pub struct FundEpoch<'info> {
     pub authority: Signer<'info>,
-    #[account(seeds = [TREASURY_SEED], bump = treasury.bump, has_one = bust_mint)]
+    #[account(mut, seeds = [TREASURY_SEED], bump = treasury.bump, has_one = bust_mint)]
     pub treasury: Account<'info, Treasury>,
     #[account(mut, seeds = [TREASURY_TOKENS_SEED], bump = treasury.tokens_bump)]
     pub treasury_tokens: Account<'info, TokenAccount>,
@@ -113,6 +148,8 @@ pub fn handle_fund_epoch(ctx: Context<FundEpoch>, _epoch: u64, amount: u64) -> R
     )?;
     record.pool = amount;
     record.funded = true;
+    let treasury = &mut ctx.accounts.treasury;
+    treasury.unclaimed = treasury.unclaimed.checked_add(amount).ok_or(PerpError::MathOverflow)?;
     emit!(EpochFundedEvent { epoch: record.epoch, bust: amount, total_loss: record.total_loss });
     Ok(())
 }
@@ -123,7 +160,7 @@ pub fn handle_fund_epoch(ctx: Context<FundEpoch>, _epoch: u64, amount: u64) -> R
 #[instruction(epoch: u64)]
 pub struct ClaimXbust<'info> {
     pub caller: Signer<'info>,
-    #[account(seeds = [TREASURY_SEED], bump = treasury.bump, has_one = xbust_mint)]
+    #[account(mut, seeds = [TREASURY_SEED], bump = treasury.bump, has_one = xbust_mint)]
     pub treasury: Account<'info, Treasury>,
     #[account(mut, seeds = [EPOCH_SEED, &epoch.to_le_bytes()], bump = epoch_record.bump)]
     pub epoch_record: Account<'info, EpochRecord>,
@@ -152,6 +189,8 @@ pub fn handle_claim_xbust(ctx: Context<ClaimXbust>, _epoch: u64) -> Result<()> {
     let amount = if loss == 0 { 0 } else { (loss as u128 * record.pool as u128 / record.total_loss as u128) as u64 };
     record.claimed = record.claimed.checked_add(amount).ok_or(PerpError::MathOverflow)?;
     require!(record.claimed <= record.pool, PerpError::MathOverflow);
+    let treasury = &mut ctx.accounts.treasury;
+    treasury.unclaimed = treasury.unclaimed.checked_sub(amount).ok_or(PerpError::MathOverflow)?;
     if amount > 0 {
         let bump = [ctx.accounts.treasury.bump];
         let seeds: &[&[&[u8]]] = &[&[TREASURY_SEED, &bump]];
@@ -244,7 +283,7 @@ pub struct ConvertVested<'info> {
     pub token_program: Program<'info, Token>,
 }
 
-/// Unlocked xBUST becomes $BUST at that day's rate: treasury $BUST / (xBUST supply + locked).
+/// Unlocked xBUST becomes $BUST at that day's rate: treasury $BUST / (xBUST supply + locked + unclaimed).
 /// xBUST burned at the wall lowers the supply, so the rate rises for those who wait.
 pub fn handle_convert_vested(ctx: Context<ConvertVested>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
@@ -253,7 +292,7 @@ pub fn handle_convert_vested(ctx: Context<ConvertVested>) -> Result<()> {
     let xbust = vest.convertible(now, treasury.vest_sec);
     require!(xbust > 0, PerpError::NothingToWithdraw);
 
-    let outstanding = ctx.accounts.xbust_mint.supply as u128 + treasury.total_locked as u128;
+    let outstanding = ctx.accounts.xbust_mint.supply as u128 + treasury.total_locked as u128 + treasury.unclaimed as u128;
     let bust = (xbust as u128 * ctx.accounts.treasury_tokens.amount as u128 / outstanding) as u64;
     vest.converted = vest.vested(now, treasury.vest_sec);
     vest.carried = 0;

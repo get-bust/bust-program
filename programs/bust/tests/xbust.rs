@@ -186,3 +186,78 @@ fn adding_to_a_lock_keeps_what_already_unlocked() {
     let theirs = env.token_account_of(&mint, &attacker.pubkey(), 0);
     expect_err(env.convert(&attacker, theirs), "AccountNotInitialized");
 }
+
+// ---------- the rate cannot be diluted by unclaimed rights
+
+#[test]
+fn early_converter_cannot_take_unclaimed_xbust_backing() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let a = trade_and_close(&mut env, 100.0, 95.0); // −50
+    let b = trade_and_close(&mut env, 300.0, 95.0); // −150
+    env.next_epoch();
+    env.distribute().unwrap();
+    let pool = bust_units(1_000);
+    env.fund_epoch(0, pool).unwrap();
+    assert_eq!(env.account::<bust::Treasury>(&treasury()).unclaimed, pool);
+
+    // A claims, locks and converts 30 days later; B has not claimed yet
+    let ka = a.kp.pubkey();
+    let xa = env.xbust_account(&ka);
+    env.claim_xbust(&ka, 0, xa).unwrap();
+    env.lock_xbust(&a.kp, xa, pool / 4).unwrap();
+    env.set_time(env.now + VEST_SEC);
+    let mint = env.bust_mint;
+    let out_a = env.token_account_of(&mint, &ka, 0);
+    env.convert(&a.kp, out_a).unwrap();
+    assert_eq!(env.token_balance(&out_a), pool / 4, "A takes only their own share");
+
+    // B claims later and still gets all of theirs
+    let kb = b.kp.pubkey();
+    let xb = env.xbust_account(&kb);
+    env.claim_xbust(&kb, 0, xb).unwrap();
+    assert_eq!(env.account::<bust::Treasury>(&treasury()).unclaimed, 0);
+    env.lock_xbust(&b.kp, xb, pool * 3 / 4).unwrap();
+    env.set_time(env.now + VEST_SEC);
+    let out_b = env.token_account_of(&mint, &kb, 0);
+    env.convert(&b.kp, out_b).unwrap();
+    assert_eq!(env.token_balance(&out_b), pool * 3 / 4);
+}
+
+fn migrate(env: &mut Env) -> Result<(), String> {
+    let admin = env.admin.insecure_clone();
+    let ix = Instruction::new_with_bytes(
+        bust::id(),
+        &bust::instruction::MigrateTreasury {}.data(),
+        bust::accounts::MigrateTreasury {
+            admin: admin.pubkey(),
+            config: config(),
+            treasury: treasury(),
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+    env.send(&[ix], &[&admin])
+}
+
+#[test]
+fn migrate_treasury_grows_only_an_old_account() {
+    let mut env = Env::new();
+    expect_err(migrate(&mut env), "InvalidConfig");
+
+    // Cut the account back to its size before unclaimed existed
+    let mut acc = env.svm.get_account(&treasury()).unwrap();
+    let before: bust::Treasury = env.account(&treasury());
+    acc.data.truncate(bust::Treasury::V1_LEN);
+    acc.lamports = env.svm.minimum_balance_for_rent_exemption(bust::Treasury::V1_LEN);
+    env.svm.set_account(treasury(), acc).unwrap();
+
+    migrate(&mut env).unwrap();
+    let after: bust::Treasury = env.account(&treasury());
+    assert_eq!(
+        (after.xbust_mint, after.buyback_authority, after.vest_sec),
+        (before.xbust_mint, before.buyback_authority, before.vest_sec)
+    );
+    assert_eq!(after.unclaimed, 0);
+    expect_err(migrate(&mut env), "InvalidConfig");
+}
