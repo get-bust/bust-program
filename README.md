@@ -1,0 +1,347 @@
+# bust-program
+
+The Solana program behind Bust: leveraged perpetuals traded against a single USDC vault, with the vault's
+profit shared between $BUST stakers, a buyback, and the traders who lost.
+
+> **Status: not audited.** The program has had an internal review only. Do not use it with real funds.
+
+- [Overview](#overview)
+- [Accounts](#accounts)
+- [Instructions and who can call them](#instructions-and-who-can-call-them)
+- [Trading](#trading)
+- [Settlement](#settlement)
+- [Payout queue](#payout-queue)
+- [Epoch distribution](#epoch-distribution)
+- [$BUST staking](#bust-staking)
+- [xBUST](#xbust)
+- [LaunchLab platform fees](#launchlab-platform-fees)
+- [Ledger invariants](#ledger-invariants)
+- [Trust model](#trust-model)
+- [Parameters](#parameters)
+- [Build and test](#build-and-test)
+- [Verifying a deployment](#verifying-a-deployment)
+- [License](#license)
+
+---
+
+## Overview
+
+Traders deposit USDC and open long or short positions with up to 1000× leverage on markets priced by Pyth.
+There is no order book and no counterparty matching: the vault takes the other side of every trade. A
+losing trade pays the vault, a winning trade is paid by it.
+
+Fees and the vault's profit are distributed once per epoch (one day):
+
+```mermaid
+flowchart LR
+    T[Traders] -- deposits / margin --> V[(Vault<br/>USDC)]
+    V -- wins --> T
+    LL[LaunchLab<br/>platform fees] -- USDC, as capital --> V
+    V -- "fees + profit above<br/>the high-water mark" --> D{Epoch<br/>distribution}
+    D -- 40% --> B[Buyback wallet:<br/>buy & burn $BUST]
+    D -- 15% --> X[Buyback wallet:<br/>buy $BUST for xBUST]
+    D -- 30% --> S[$BUST stakers<br/>streamed in USDC]
+    D -- 15% --> DEV[Developer]
+    X -- fund_epoch --> TR[(xBUST treasury<br/>$BUST)]
+    TR -- "xBUST, pro rata<br/>to net loss" --> L[That epoch's losers]
+```
+
+The vault keeps part of its profit before the split. The share it keeps follows how much of its capacity
+traders used over the last seven days, between 20% and 80%.
+
+## Accounts
+
+Every account except the payout queue is a PDA of the program.
+
+| Account | Seeds | Holds |
+|---|---|---|
+| `Config` | `config` | admin, USDC mint, pause flag, trading parameters, queue address |
+| `Vault` | `vault` | the ledger: cash, user balances, open margin, accrued fees, queued debt |
+| vault token account | `vault_tokens` | all USDC: deposits, margin, vault cash, fees and undistributed shares |
+| `PayoutQueue` | client-created (81,944 bytes) | FIFO ring of 2,048 unpaid wins |
+| `Market` | `market`, index (u16) | Pyth feed id, impact size parameter, open interest per side |
+| `UserAccount` | `user`, owner | balance, reserved and queued amounts, session key, order and position counters |
+| `OrderRequest` | `order`, owner, id | a pending open or close and the time it was requested |
+| `Position` | `position`, owner, id | side, margin, leverage, notional, entry and bust prices |
+| `Distributor` | `distributor` | epoch counter, high-water mark, 7-day utilisation ring, the four shares, epoch loss |
+| `StakePool` / stake tokens | `stake_pool` / `stake_tokens` | staked $BUST and the reward stream |
+| `StakeAccount` | `stake`, owner | a staker's stake, pending unstake and unclaimed USDC |
+| `Treasury` / treasury tokens | `treasury` / `treasury_tokens` | $BUST backing xBUST, locked and unclaimed xBUST |
+| xBUST mint | `xbust_mint` | classic SPL mint; the treasury is its only authority, no freeze authority |
+| `EpochRecord` | `epoch`, epoch | an epoch's total net loss and its xBUST pool |
+| `EpochLoss` | `epoch_loss`, owner, epoch | one user's net result in one epoch |
+| `Vest` | `vest`, owner | a user's xBUST lock |
+| `LaunchConfig` | `launch_config` | the LaunchLab program, platform config, quote mint, swap destination |
+| fee wallet | `fee_wallet` | the LaunchLab platform's fee wallet; the program signs for it |
+
+## Instructions and who can call them
+
+| Caller | Instructions |
+|---|---|
+| Admin | `initialize`, `update_config`, `set_paused`, `add_market`, `init_distributor`, `update_distributor`, `init_stake_pool`, `init_treasury`, `update_treasury`, `migrate_treasury`, `init_launch_config`, `update_launch_config` |
+| Account owner | `create_user`, `deposit`, `withdraw`, `set_session`, `revoke_session`, `stake`, `request_unstake`, `withdraw_unstaked`, `claim_rewards`, `lock_xbust`, `convert_vested` |
+| Owner or session key | `request_open`, `request_close` |
+| Buyback authority | `fund_epoch` |
+| Anyone (keepers) | `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `claim_launch_fees`, `sweep_launch_fees`, `seed_vault` |
+
+The permissionless instructions cannot move money anywhere the program has not fixed in advance:
+`withdraw_bucket` pays only the registered wallets, `claim_xbust` mints only to the loser's account, and the
+fills and liquidations settle against the user's own account.
+
+A separate rent payer can sign `create_user`, `request_open` and `request_close`, so a relayer can sponsor
+users who hold no SOL. Rent always goes back to whoever paid it.
+
+## Trading
+
+### Two-step orders
+
+If a user could open at a price they put in the transaction, they could wait for a Pyth update they like, or
+trade on a move they already saw off chain. At high leverage that is free money taken from the vault. So every
+open and close takes two steps:
+
+```mermaid
+sequenceDiagram
+    participant U as User / session key
+    participant P as bust program
+    participant K as Keeper
+    participant H as Pyth (Hermes)
+    U->>P: request_open(side, margin, leverage)
+    Note over P: margin: balance → reserved<br/>OrderRequest stores requested_at
+    K->>H: signed price published after requested_at
+    K->>P: execute_open(order, price update)
+    Note over P: publish_time > requested_at<br/>publish_time ≤ requested_at + 5 s<br/>OI cap, bust price, open Position
+    U->>P: request_close(position)
+    K->>P: execute_close(order, price update)
+    Note over P: same window, settle, close Position,<br/>update the user's EpochLoss
+```
+
+- The fill price must be published **after** the request second and at most `max_fill_delay_sec` (5 s) later.
+  Neither the user nor the keeper chooses it.
+- Prices come from Pyth `PriceUpdateV2` accounts. They must be at most 5 s old, carry at least 3 verified
+  Wormhole signatures under partial verification, and have a confidence interval within 0.2% of the price.
+- An order nobody fills can be cancelled after `order_timeout_sec` (30 s) and its margin comes back. Not
+  earlier: cancelling after seeing the next price would be a free option.
+- Anyone can be the keeper. A keeper decides only *when* an order is filled, inside the window.
+
+### Session keys
+
+The owner can authorise a short-lived key (at most 30 days) that the frontend keeps in the browser, so trades
+do not need a wallet prompt each time. A session key is accepted only by `request_open` and `request_close`.
+Withdrawals, staking, xBUST and session changes always require the owner, because the PDA is derived from the
+signer.
+
+### Liquidation
+
+Each position has a bust price `liq_buffer_ppm` (5 bps) inside the price where its margin would reach zero:
+
+```
+long:  entry × (1 − 1/leverage + buffer)
+short: entry × (1 + 1/leverage − buffer)
+```
+
+Anyone can liquidate a position at the latest valid price once the price is at or past its bust price. The
+whole margin goes to the vault, less the loss fee.
+
+### Open interest cap
+
+At fill time the open interest on the market's side, plus the new position, must stay under
+`net vault × oi_cap_ratio_ppm` (0.6), where the net vault is cash minus queued debt. Longs and shorts on a
+market each have their own cap. 0.6 comes from a year of minute data: at that level the vault lost at most half
+of itself in the worst 72 hours. A vault whose debt reaches its cash accepts no new positions.
+
+## Settlement
+
+All amounts are fixed point: prices at 1e-8, USDC in base units, rates in ppm, intermediate values in u128 at
+a 1e12 scale. The math matches the off-chain engine to the cent, and the unit tests pin it.
+
+**Loss.** The user loses `min(|PnL|, margin)`. The loss fee (2%) is taken from it into accrued fees and the
+rest becomes vault cash.
+
+**Win.** The raw profit is cut before it is paid, so small and very large moves cannot be farmed:
+
+1. **Dead band:** moves under 0.2 bps pay nothing.
+2. **Holdback:** inside a small-move band (0.75 to 6 bps), a share `3.597 · width · u²(1−u)²` is held back.
+3. **Impact haircut:** what is left is scaled by `(1 − base) · move / (move + 1/rate + ref / (1e6 · mult))`,
+   where `mult` is the market's size parameter.
+4. **Win fee:** 2% of the result.
+
+The margin always comes back. The profit comes from vault cash; see the payout queue for what happens when cash
+is short.
+
+## Payout queue
+
+When vault cash cannot cover a win, the vault pays what it holds and the remainder goes into a FIFO queue as
+`(owner, amount)`. While the queue is not empty:
+
+- new wins pay nothing up front and are queued whole;
+- no fees are taken, since they would come out of money already owed;
+- the open interest cap is computed on cash minus the queue, so it shrinks by the debt and is zero once the
+  debt reaches the cash;
+- `distribute` refuses to run.
+
+`harvest` pays entries from the head as cash comes back from losses or seeding. Anyone can call it, and it
+checks that each passed account is the PDA of the entry's owner. The queue holds 2,048 entries; it is larger
+than the 10 KB CPI limit, so the client creates the account and `initialize` binds it.
+
+## Epoch distribution
+
+Once an epoch has ended and the queue is empty, anyone can call `distribute`:
+
+```
+profit    = vault cash − high-water mark
+keep      = clamp(peak utilisation over the last 7 days, 20%, 80%)
+from_cash = profit × (1 − keep)
+pool      = from_cash + accrued fees
+burn 40% · stakers 30% · xBUST 15% · developer 15% (rounding remainder to the developer)
+```
+
+- **High-water mark.** Profit is only what vault cash gained since the last distribution. A losing stretch has
+  to be won back before anything is paid out. `seed_vault` and LaunchLab fees raise the mark by what they add,
+  so capital put in is never distributed as profit.
+- **Utilisation.** `record_utilization` stores the day's peak of `max(OI long, OI short) / cap` across the
+  markets passed in. It reads only market accounts the program owns, so the caller cannot choose the number.
+- **The money stays put.** The shares are ledger entries; the USDC stays in the vault token account until it is
+  withdrawn. The burn and xBUST shares can only go to the registered buyback wallet and the developer share
+  only to the registered developer wallet. The staker share never leaves through `withdraw_bucket`.
+- The closing epoch's total net loss is frozen into an `EpochRecord` for xBUST.
+
+## $BUST staking
+
+Each distribution hands the staker share to the stake pool, which streams it second by second over the next
+epoch (Synthetix StakingRewards). A staker earns in proportion to their stake for the time they were staked,
+so staking just before a distribution and leaving after it earns almost nothing. With nobody staked, the share
+goes to the burn instead.
+
+`request_unstake` stops rewards at once and releases the $BUST after the pool's unstake period. Rewards are
+paid in USDC from the vault token account and can never exceed what was set aside for stakers.
+
+## xBUST
+
+xBUST is the losers' share of each epoch.
+
+1. **Recording.** Every close and liquidation updates the user's `EpochLoss` with their net result, so a win in
+   the same epoch reduces an earlier loss. The distributor keeps the epoch's total.
+2. **Funding.** The buyback wallet withdraws the xBUST share in USDC, buys $BUST and calls `fund_epoch`. Only
+   the registered buyback authority can; otherwise anyone could fund an epoch with one base unit and lock its
+   losers out. The $BUST goes into the treasury and opens xBUST rights at the current rate:
+   `xbust = bust × (supply + locked + unclaimed) / treasury`, or 1:1 when there are no claims yet.
+3. **Claiming.** Each loser receives `loss / total_loss` of the epoch's pool, minted to their own account. The
+   record closes and its rent goes back to the keeper who paid it.
+4. **Selling or waiting.** xBUST is a classic SPL token, so it can be sold. Or the holder locks it: the xBUST
+   is burned and unlocks linearly over 30 days into $BUST at that day's rate,
+
+   ```
+   rate = treasury $BUST / (xBUST supply + locked xBUST + unclaimed xBUST)
+   ```
+
+   xBUST that is sold and burned elsewhere lowers the supply, so the rate rises for those who wait. Adding to a
+   lock restarts the clock but keeps what had already unlocked.
+
+`unclaimed` is part of the rate so that an early converter cannot take the backing of losers who have not
+claimed yet. New rights open at the current rate so that new losers do not share the surplus that sellers left
+to those who wait.
+
+## LaunchLab platform fees
+
+$BUST launches from Bust's own Raydium LaunchLab platform, and the platform's fee wallet is the program's
+`fee_wallet` PDA.
+
+- `claim_launch_fees` has LaunchLab pay the platform fee, from one pool or from the platform fee vault, signing
+  as the PDA.
+- That signature would work for any program it was handed to, so the admin can register only the two Raydium
+  LaunchLab program ids (mainnet and devnet).
+- `sweep_launch_fees` moves what was claimed. USDC enters the vault as capital and raises the high-water mark.
+  Any other quote token goes to the registered swap wallet, to be swapped to USDC and seeded back. Nothing else
+  can receive it.
+
+## Ledger invariants
+
+These hold after every instruction, and the randomised test checks all of them after every step:
+
+```
+vault token balance = cash + user_balances + open_margin + fees_accrued + distributor shares
+user_balances       = Σ (balance + reserved) over users
+queue_total         = Σ queued over users                   (debt with no tokens behind it)
+epoch_loss          = Σ loss over this epoch's EpochLoss records
+```
+
+## Trust model
+
+| Party | Can | Cannot |
+|---|---|---|
+| Admin (a multisig on mainnet) | change parameters and distribution shares; change the registered buyback, developer and swap wallets; pause new positions; add markets; upgrade the program | withdraw user balances or vault cash directly; register a launchpad other than Raydium LaunchLab |
+| Buyback authority | fund epochs, or fund them less than the xBUST share | mint xBUST or take $BUST out of the treasury |
+| Keepers | decide when an order is filled, inside the window; liquidate bust positions | choose a price outside the window, liquidate a healthy position, or move funds between users |
+| Session key | open and close positions for its owner until it expires | withdraw, stake, lock or change the session |
+| Pyth | supply prices | (the program trusts a price that passes the age, signature and confidence checks) |
+
+The buyback wallet's purchases and burns happen off chain. The `Distributed` and `EpochFundedEvent` events let
+anyone compare the USDC it received with the $BUST it put into the treasury.
+
+Pausing stops opens only. Closes, liquidations, harvests and withdrawals keep working, so a pause never traps
+funds or leaves a bust position open against the vault.
+
+## Parameters
+
+Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change them within validated bounds.
+
+| Parameter | Default |
+|---|---|
+| Max leverage | 1000× |
+| Min margin | 1 USDC |
+| Win fee / loss fee | 2% / 2% |
+| Bust price buffer | 5 bps |
+| Dead band | 0.2 bps |
+| Holdback band | 0.75 – 6 bps |
+| Impact base / rate / reference notional | 10% / 15,000 / $100,000 |
+| OI cap | 0.6 × net vault, per market and side |
+| Max price age / confidence | 5 s / 0.2% |
+| Min Pyth signatures | 3 |
+| Fill window / order timeout | 5 s / 30 s |
+| Max session | 30 days |
+| Epoch | 1 day |
+| Vault share of profit | 20% – 80%, by 7-day peak utilisation |
+| Shares | 40% burn, 30% stakers, 15% xBUST, 15% developer |
+
+The unstake period and the xBUST unlock period are set when the stake pool and treasury are created (the
+tests use 7 and 30 days).
+
+## Build and test
+
+Requires Rust 1.89.0 (pinned in `rust-toolchain.toml`), the Solana CLI and Anchor 1.2.1.
+
+```sh
+anchor build          # or: cargo build-sbf
+cargo test
+```
+
+The integration tests run on [LiteSVM](https://github.com/LiteSVM/litesvm) against the SBF build in
+`target/deploy/bust.so`, so build before testing. Pyth prices are written directly as `PriceUpdateV2`
+accounts.
+
+```
+programs/bust/src/
+  lib.rs              instruction entry points
+  state.rs            accounts and parameters
+  math.rs             settlement and distribution math, with unit tests
+  instructions/       admin, user, trade, queue, distribution, staking, xbust, launchlab
+programs/bust/tests/
+  common/mod.rs       LiteSVM harness
+  *.rs                one file per module, plus invariants.rs (randomised)
+```
+
+## Verifying a deployment
+
+Release builds are reproducible with [solana-verify](https://github.com/Ellipsis-Labs/solana-verifiable-build):
+
+```sh
+solana-verify build --library-name bust
+solana-verify get-program-hash -u <cluster> <program id>
+solana-verify get-executable-hash target/deploy/bust.so
+solana-verify verify-from-repo -u <cluster> --program-id <program id> \
+  https://github.com/get-bust/bust-program --commit-hash <commit> --library-name bust
+```
+
+## License
+
+Business Source License 1.1. See [LICENSE](LICENSE).
