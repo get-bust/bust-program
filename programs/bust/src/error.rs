@@ -10,6 +10,8 @@ pub enum PerpError {
     MarginTooSmall,
     #[msg("Insufficient balance")]
     InsufficientBalance,
+    #[msg("Position size exceeds the open interest cap")]
+    OpenInterestCap,
     #[msg("Invalid side")]
     InvalidSide,
     #[msg("Price is not positive or uses an unsupported exponent")]

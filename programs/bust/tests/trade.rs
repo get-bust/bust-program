@@ -271,3 +271,27 @@ fn short_is_liquidated_on_the_way_up() {
     assert_eq!(m.oi_short, 0);
     env.assert_invariant();
 }
+
+#[test]
+fn open_interest_cap_follows_vault() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0)); // cap 15,000
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    expect_err(env.open(&owner, &t.kp, Side::Long, usdc(160.0), 100).map(|_| ()), "OpenInterestCap");
+    env.open(&owner, &t.kp, Side::Long, usdc(100.0), 100).unwrap(); // 10,000
+    expect_err(env.open(&owner, &t.kp, Side::Long, usdc(60.0), 100).map(|_| ()), "OpenInterestCap");
+    env.open(&owner, &t.kp, Side::Short, usdc(140.0), 100).unwrap(); // the other side has its own cap
+
+    // More capital, more room
+    env.seed(usdc(10_000.0)); // cap 21,000
+    env.open(&owner, &t.kp, Side::Long, usdc(60.0), 100).unwrap();
+}
+
+#[test]
+fn an_empty_vault_takes_no_positions() {
+    let mut env = Env::new();
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    expect_err(env.open(&owner, &t.kp, Side::Long, usdc(10.0), 1).map(|_| ()), "OpenInterestCap");
+}

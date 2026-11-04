@@ -95,6 +95,13 @@ pub struct Vault {
     pub tokens_bump: u8,
 }
 
+impl Vault {
+    /// What the vault can lose (may go negative)
+    pub fn net_equity(&self) -> i128 {
+        self.cash as i128
+    }
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Market {

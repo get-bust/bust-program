@@ -204,12 +204,16 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     let (side, margin, leverage) = (order.side, order.margin, order.leverage);
     let notional = margin.checked_mul(leverage as u64).ok_or(PerpError::MathOverflow)?;
 
+    // The cap follows the vault: net vault × ratio per market and side; a single position cannot exceed it either
+    let cap = math::oi_cap(ctx.accounts.vault.net_equity(), params.oi_cap_ratio_ppm);
     let market = &mut ctx.accounts.market;
     let oi = match side {
         Side::Long => &mut market.oi_long,
         Side::Short => &mut market.oi_short,
     };
-    *oi = oi.checked_add(notional).ok_or(PerpError::MathOverflow)?;
+    let new_oi = oi.checked_add(notional).ok_or(PerpError::MathOverflow)?;
+    require!(new_oi <= cap, PerpError::OpenInterestCap);
+    *oi = new_oi;
 
     let user = &mut ctx.accounts.user;
     user.reserved = user.reserved.checked_sub(margin).ok_or(PerpError::MathOverflow)?;
