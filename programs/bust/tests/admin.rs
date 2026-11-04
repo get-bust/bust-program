@@ -69,3 +69,40 @@ fn admin_adds_markets_once_per_index() {
     let m: bust::Market = env.account(&market_pda(1));
     assert_eq!((m.index, m.feed_id), (1, [9u8; 32]));
 }
+
+#[test]
+fn pause_stops_new_positions_only() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    let pos = env.open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
+    let pending = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
+
+    let admin = env.admin.insecure_clone();
+    let pause = env.admin_ix(bust::instruction::SetPaused { paused: true }.data());
+    env.send(&[pause], &[&admin]).unwrap();
+    assert!(env.config_state().paused);
+
+    expect_err(env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).map(|_| ()), "Paused");
+    // An order requested before the pause is not filled either
+    env.tick();
+    expect_err(env.execute_open(&pending).map(|_| ()), "Paused");
+
+    // Closing and withdrawing still work
+    env.close_at(&pos, &t.kp, 100.0).unwrap();
+    let ix = env.deposit_ix(&t, usdc(100.0), false);
+    env.send(&[ix], &[&t.kp]).unwrap();
+
+    // Only the admin pauses or unpauses
+    let ix = Instruction::new_with_bytes(
+        bust::id(),
+        &bust::instruction::SetPaused { paused: false }.data(),
+        bust::accounts::AdminOnly { admin: owner, config: config() }.to_account_metas(None),
+    );
+    expect_err(env.send(&[ix], &[&t.kp]), "ConstraintHasOne");
+
+    let unpause = env.admin_ix(bust::instruction::SetPaused { paused: false }.data());
+    env.send(&[unpause], &[&admin]).unwrap();
+    env.open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
+}

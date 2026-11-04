@@ -81,6 +81,8 @@ impl Params {
 pub struct Config {
     pub admin: Pubkey,
     pub usdc_mint: Pubkey,
+    /// Stops new positions; closes, liquidations and withdrawals keep working
+    pub paused: bool,
     pub params: Params,
     /// The payout queue account (larger than 10 KB, created by the client)
     pub queue: Pubkey,

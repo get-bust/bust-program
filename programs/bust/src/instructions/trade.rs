@@ -82,8 +82,10 @@ pub struct RequestOpen<'info> {
 
 /// Margin is locked right away (balance → reserved); the price is set at fill time
 pub fn handle_request_open(ctx: Context<RequestOpen>, side: Side, margin: u64, leverage: u16) -> Result<()> {
-    let params = &ctx.accounts.config.params;
+    let config = &ctx.accounts.config;
+    let params = &config.params;
     let now = Clock::get()?.unix_timestamp;
+    require!(!config.paused, PerpError::Paused);
     require!(ctx.accounts.user.can_trade(&ctx.accounts.authority.key(), now), PerpError::Unauthorized);
     require!(leverage >= 1 && leverage <= params.max_leverage, PerpError::InvalidLeverage);
     require!(margin >= params.min_margin, PerpError::MarginTooSmall);
@@ -196,8 +198,10 @@ pub struct ExecuteOpen<'info> {
 }
 
 pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
-    let params = &ctx.accounts.config.params;
+    let config = &ctx.accounts.config;
+    let params = &config.params;
     let order = &ctx.accounts.order;
+    require!(!config.paused, PerpError::Paused);
 
     let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, params)?;
     check_fill_window(&read, order.requested_at, params)?;

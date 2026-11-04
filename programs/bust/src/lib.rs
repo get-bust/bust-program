@@ -27,6 +27,10 @@ pub mod bust {
         instructions::admin::handle_update_config(ctx, params)
     }
 
+    pub fn set_paused(ctx: Context<AdminOnly>, paused: bool) -> Result<()> {
+        instructions::admin::handle_set_paused(ctx, paused)
+    }
+
     pub fn add_market(
         ctx: Context<AddMarket>,
         index: u16,

@@ -2,6 +2,8 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum PerpError {
+    #[msg("Program is paused")]
+    Paused,
     #[msg("Signer is neither the owner nor an active session key")]
     Unauthorized,
     #[msg("Leverage out of range")]

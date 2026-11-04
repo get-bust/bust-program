@@ -36,6 +36,7 @@ pub fn handle_initialize(ctx: Context<Initialize>, params: Params) -> Result<()>
     ctx.accounts.config.set_inner(Config {
         admin: ctx.accounts.admin.key(),
         usdc_mint: ctx.accounts.usdc_mint.key(),
+        paused: false,
         params,
         queue: ctx.accounts.queue.key(),
         bump: ctx.bumps.config,
@@ -52,7 +53,7 @@ pub fn handle_initialize(ctx: Context<Initialize>, params: Params) -> Result<()>
     Ok(())
 }
 
-// ---------- update_config
+// ---------- update_config / set_paused
 
 #[derive(Accounts)]
 pub struct AdminOnly<'info> {
@@ -64,6 +65,11 @@ pub struct AdminOnly<'info> {
 pub fn handle_update_config(ctx: Context<AdminOnly>, params: Params) -> Result<()> {
     require!(params.validate(), PerpError::InvalidConfig);
     ctx.accounts.config.params = params;
+    Ok(())
+}
+
+pub fn handle_set_paused(ctx: Context<AdminOnly>, paused: bool) -> Result<()> {
+    ctx.accounts.config.paused = paused;
     Ok(())
 }
 
