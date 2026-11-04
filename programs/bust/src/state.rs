@@ -120,9 +120,13 @@ pub enum Side {
 pub struct UserAccount {
     pub owner: Pubkey,
     pub balance: u64,
+    /// Margin locked in pending open orders (counted in user_balances)
+    pub reserved: u64,
     /// Pubkey::default() when there is no session
     pub session_key: Pubkey,
     pub session_expires_at: i64,
+    pub next_position_id: u64,
+    pub next_order_id: u64,
     pub bump: u8,
 }
 
@@ -131,4 +135,48 @@ impl UserAccount {
         *signer == self.owner
             || (self.session_key != Pubkey::default() && *signer == self.session_key && now < self.session_expires_at)
     }
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, Debug, PartialEq, Eq)]
+pub enum OrderKind {
+    Open,
+    Close,
+}
+
+/// Two-step order: the user writes the request with a timestamp, a keeper fills it with a price
+/// published AFTER the request. Nobody gets to pick a stale price they already know.
+#[account]
+#[derive(InitSpace)]
+pub struct OrderRequest {
+    pub owner: Pubkey,
+    pub id: u64,
+    pub kind: OrderKind,
+    pub market: Pubkey,
+    /// The position a close order closes
+    pub position: Pubkey,
+    pub side: Side,
+    pub margin: u64,
+    pub leverage: u16,
+    pub requested_at: i64,
+    pub rent_payer: Pubkey,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Position {
+    pub owner: Pubkey,
+    pub id: u64,
+    pub market: Pubkey,
+    pub side: Side,
+    pub margin: u64,
+    pub leverage: u16,
+    pub notional: u64,
+    /// 1e-8 scale
+    pub entry_price: u64,
+    pub bust_price: u64,
+    pub opened_at: i64,
+    /// Whoever paid the rent (relayer, keeper or user) gets it back on close
+    pub rent_payer: Pubkey,
+    pub bump: u8,
 }

@@ -13,8 +13,9 @@ pub use {
         AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
     },
     anchor_spl::token::spl_token,
-    bust::Params,
+    bust::{math, Params, Side},
     litesvm::LiteSVM,
+    pyth_solana_receiver_sdk::price_update::{PriceFeedMessage, PriceUpdateV2, VerificationLevel},
     solana_account::Account,
     solana_keypair::Keypair,
     solana_message::{Message, VersionedMessage},
@@ -48,6 +49,12 @@ pub fn market_pda(index: u16) -> Pubkey {
 pub fn user_pda(owner: &Pubkey) -> Pubkey {
     pda(&[bust::USER_SEED, owner.as_ref()])
 }
+pub fn position_pda(owner: &Pubkey, id: u64) -> Pubkey {
+    pda(&[bust::POSITION_SEED, owner.as_ref(), &id.to_le_bytes()])
+}
+pub fn order_pda(owner: &Pubkey, id: u64) -> Pubkey {
+    pda(&[bust::ORDER_SEED, owner.as_ref(), &id.to_le_bytes()])
+}
 
 pub fn expect_err(res: Result<(), String>, name: &str) {
     let logs = res.expect_err(&format!("expected {name}"));
@@ -64,8 +71,12 @@ pub struct Env {
     pub admin: Keypair,
     pub mint: Pubkey,
     pub market: Pubkey,
-    /// Chain clock (unix seconds)
+    pub price: Pubkey,
+    /// Chain clock (unix seconds) and the last price written
     pub now: i64,
+    pub last_price: f64,
+    pub level: VerificationLevel,
+    pub keeper: Keypair,
 }
 
 impl Env {
@@ -79,11 +90,24 @@ impl Env {
 
         let admin = Keypair::new();
         svm.airdrop(&admin.pubkey(), 100_000_000_000).unwrap();
-        let mut env = Env { svm, admin, mint: Pubkey::default(), market: market_pda(0), now: NOW };
+        let mut env = Env {
+            svm,
+            admin,
+            mint: Pubkey::default(),
+            market: market_pda(0),
+            price: Pubkey::new_unique(),
+            now: NOW,
+            last_price: 100.0,
+            level: VerificationLevel::Full,
+            keeper: Keypair::new(),
+        };
+        let keeper = env.keeper.pubkey();
+        env.svm.airdrop(&keeper, 10_000_000_000).unwrap();
         env.mint = env.create_mint();
         env.initialize(Params::DEFAULT).unwrap();
         let admin = env.admin.insecure_clone();
         env.add_market(&admin, 0, FEED, ETH_MULT).unwrap();
+        env.set_price(100.0);
         env
     }
 
@@ -170,6 +194,46 @@ impl Env {
         let mut clock: Clock = self.svm.get_sysvar();
         clock.unix_timestamp = t;
         self.svm.set_sysvar(&clock);
+    }
+
+    /// Writes the Pyth PriceUpdateV2 account directly
+    pub fn set_price_full(&mut self, price: f64, conf: f64, publish_time: i64) {
+        let update = PriceUpdateV2 {
+            write_authority: Pubkey::new_unique(),
+            verification_level: self.level,
+            price_message: PriceFeedMessage {
+                feed_id: FEED,
+                price: (price * 1e8).round() as i64,
+                conf: (conf * 1e8).round() as u64,
+                exponent: -8,
+                publish_time,
+                prev_publish_time: publish_time - 1,
+                ema_price: (price * 1e8).round() as i64,
+                ema_conf: 0,
+            },
+            posted_slot: 0,
+        };
+        let mut data = Vec::new();
+        update.try_serialize(&mut data).unwrap();
+        self.svm
+            .set_account(
+                self.price,
+                Account { lamports: 10_000_000, data, owner: pyth_solana_receiver_sdk::ID, executable: false, rent_epoch: 0 },
+            )
+            .unwrap();
+    }
+
+    /// Publishes a price at the current time
+    pub fn set_price(&mut self, price: f64) {
+        self.last_price = price;
+        self.set_price_full(price, price * 0.0001, self.now);
+    }
+
+    /// Moves the clock one second and republishes the last price at the new time
+    pub fn tick(&mut self) {
+        self.set_time(self.now + 1);
+        let p = self.last_price;
+        self.set_price(p);
     }
 
     pub fn account<T: AccountDeserialize>(&self, key: &Pubkey) -> T {
@@ -272,6 +336,138 @@ impl Env {
     pub fn set_session(&mut self, owner: &Keypair, session_key: Pubkey, expires_at: i64) -> Result<(), String> {
         let ix = self.session_ix(owner, bust::instruction::SetSession { session_key, expires_at }.data());
         self.send(&[ix], &[owner])
+    }
+
+    /// signer: the owner or a session key; the signer pays the order's rent
+    pub fn request_open(
+        &mut self,
+        owner: &Pubkey,
+        signer: &Keypair,
+        side: Side,
+        margin: u64,
+        leverage: u16,
+    ) -> Result<Pubkey, String> {
+        let id = self.user_state(owner).next_order_id;
+        let order = order_pda(owner, id);
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::RequestOpen { side, margin, leverage }.data(),
+            bust::accounts::RequestOpen {
+                authority: signer.pubkey(),
+                payer: signer.pubkey(),
+                config: config(),
+                market: self.market,
+                user: user_pda(owner),
+                order,
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[signer])?;
+        Ok(order)
+    }
+
+    /// The keeper fills and pays the position's rent
+    pub fn execute_open(&mut self, order: &Pubkey) -> Result<Pubkey, String> {
+        let o: bust::OrderRequest = self.account(order);
+        let position = position_pda(&o.owner, self.user_state(&o.owner).next_position_id);
+        let keeper = self.keeper.insecure_clone();
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::ExecuteOpen {}.data(),
+            bust::accounts::ExecuteOpen {
+                keeper: keeper.pubkey(),
+                rent_payer: o.rent_payer,
+                config: config(),
+                vault: vault(),
+                market: o.market,
+                user: user_pda(&o.owner),
+                order: *order,
+                position,
+                price_update: self.price,
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[&keeper])?;
+        Ok(position)
+    }
+
+    /// Request, then fill with a price published one second later
+    pub fn open(&mut self, owner: &Pubkey, signer: &Keypair, side: Side, margin: u64, leverage: u16) -> Result<Pubkey, String> {
+        let order = self.request_open(owner, signer, side, margin, leverage)?;
+        self.tick();
+        self.execute_open(&order)
+    }
+
+    pub fn request_close(&mut self, position: &Pubkey, signer: &Keypair) -> Result<Pubkey, String> {
+        let p: bust::Position = self.account(position);
+        let order = order_pda(&p.owner, self.user_state(&p.owner).next_order_id);
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::RequestClose {}.data(),
+            bust::accounts::RequestClose {
+                authority: signer.pubkey(),
+                payer: signer.pubkey(),
+                user: user_pda(&p.owner),
+                position: *position,
+                order,
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[signer])?;
+        Ok(order)
+    }
+
+    pub fn execute_close(&mut self, order: &Pubkey) -> Result<(), String> {
+        let o: bust::OrderRequest = self.account(order);
+        let p: bust::Position = self.account(&o.position);
+        let keeper = self.keeper.insecure_clone();
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::ExecuteClose {}.data(),
+            bust::accounts::ExecuteClose {
+                keeper: keeper.pubkey(),
+                order_rent_payer: o.rent_payer,
+                position_rent_payer: p.rent_payer,
+                config: config(),
+                vault: vault(),
+                market: p.market,
+                user: user_pda(&p.owner),
+                order: *order,
+                position: o.position,
+                price_update: self.price,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[&keeper])
+    }
+
+    /// Close request, then the exit price is published one second later
+    pub fn close_at(&mut self, position: &Pubkey, signer: &Keypair, exit_price: f64) -> Result<(), String> {
+        let order = self.request_close(position, signer)?;
+        self.set_time(self.now + 1);
+        self.set_price(exit_price);
+        self.execute_close(&order)
+    }
+
+    pub fn cancel(&mut self, order: &Pubkey) -> Result<(), String> {
+        let o: bust::OrderRequest = self.account(order);
+        let caller = self.keeper.insecure_clone();
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::CancelOrder {}.data(),
+            bust::accounts::CancelOrder {
+                caller: caller.pubkey(),
+                config: config(),
+                rent_payer: o.rent_payer,
+                user: user_pda(&o.owner),
+                order: *order,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[&caller])
     }
 
     pub fn admin_ix(&self, data: Vec<u8>) -> Instruction {

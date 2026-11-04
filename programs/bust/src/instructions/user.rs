@@ -26,8 +26,11 @@ pub fn handle_create_user(ctx: Context<CreateUser>) -> Result<()> {
     ctx.accounts.user.set_inner(UserAccount {
         owner: ctx.accounts.owner.key(),
         balance: 0,
+        reserved: 0,
         session_key: Pubkey::default(),
         session_expires_at: 0,
+        next_position_id: 0,
+        next_order_id: 0,
         bump: ctx.bumps.user,
     });
     Ok(())
