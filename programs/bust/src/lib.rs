@@ -24,4 +24,21 @@ pub mod bust {
     pub fn update_config(ctx: Context<AdminOnly>, params: Params) -> Result<()> {
         instructions::admin::handle_update_config(ctx, params)
     }
+
+    // ---------- accounts and funds
+    pub fn create_user(ctx: Context<CreateUser>) -> Result<()> {
+        instructions::user::handle_create_user(ctx)
+    }
+
+    pub fn deposit(ctx: Context<MoveFunds>, amount: u64) -> Result<()> {
+        instructions::user::handle_deposit(ctx, amount)
+    }
+
+    pub fn withdraw(ctx: Context<MoveFunds>, amount: u64) -> Result<()> {
+        instructions::user::handle_withdraw(ctx, amount)
+    }
+
+    pub fn seed_vault(ctx: Context<SeedVault>, amount: u64) -> Result<()> {
+        instructions::user::handle_seed_vault(ctx, amount)
+    }
 }

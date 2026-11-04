@@ -40,10 +40,18 @@ pub fn vault() -> Pubkey {
 pub fn vault_tokens() -> Pubkey {
     pda(&[bust::VAULT_TOKENS_SEED])
 }
+pub fn user_pda(owner: &Pubkey) -> Pubkey {
+    pda(&[bust::USER_SEED, owner.as_ref()])
+}
 
 pub fn expect_err(res: Result<(), String>, name: &str) {
     let logs = res.expect_err(&format!("expected {name}"));
     assert!(logs.contains(name), "expected {name}, got:\n{logs}");
+}
+
+pub struct Trader {
+    pub kp: Keypair,
+    pub tokens: Pubkey,
 }
 
 pub struct Env {
@@ -164,6 +172,84 @@ impl Env {
     }
     pub fn vault_state(&self) -> bust::Vault {
         self.account(&vault())
+    }
+
+    pub fn user_state(&self, owner: &Pubkey) -> bust::UserAccount {
+        self.account(&user_pda(owner))
+    }
+
+    /// Ledger invariant: token balance = cash + user_balances + open_margin + fees_accrued
+    pub fn assert_invariant(&self) {
+        let v = self.vault_state();
+        assert_eq!(self.token_balance(&vault_tokens()), v.cash + v.user_balances + v.open_margin + v.fees_accrued);
+    }
+
+    pub fn caller(&mut self) -> Keypair {
+        let kp = Keypair::new();
+        self.svm.airdrop(&kp.pubkey(), 1_000_000_000).unwrap();
+        kp
+    }
+
+    /// A trader with an account and `deposit` USDC in it
+    pub fn trader(&mut self, deposit: u64) -> Trader {
+        let kp = Keypair::new();
+        self.svm.airdrop(&kp.pubkey(), 10_000_000_000).unwrap();
+        let tokens = self.token_account(&kp.pubkey(), deposit);
+        let create = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::CreateUser {}.data(),
+            bust::accounts::CreateUser {
+                owner: kp.pubkey(),
+                payer: kp.pubkey(),
+                user: user_pda(&kp.pubkey()),
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        let t = Trader { kp, tokens };
+        let mut ixs = vec![create];
+        if deposit > 0 {
+            ixs.push(self.deposit_ix(&t, deposit, true));
+        }
+        self.send(&ixs, &[&t.kp]).unwrap();
+        t
+    }
+
+    pub fn deposit_ix(&self, t: &Trader, amount: u64, deposit: bool) -> Instruction {
+        let accounts = bust::accounts::MoveFunds {
+            owner: t.kp.pubkey(),
+            config: config(),
+            vault: vault(),
+            vault_tokens: vault_tokens(),
+            user: user_pda(&t.kp.pubkey()),
+            owner_tokens: t.tokens,
+            usdc_mint: self.mint,
+            token_program: spl_token::ID,
+        }
+        .to_account_metas(None);
+        let data =
+            if deposit { bust::instruction::Deposit { amount }.data() } else { bust::instruction::Withdraw { amount }.data() };
+        Instruction::new_with_bytes(bust::id(), &data, accounts)
+    }
+
+    pub fn seed(&mut self, amount: u64) {
+        let funder = self.caller();
+        let tokens = self.token_account(&funder.pubkey(), amount);
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::SeedVault { amount }.data(),
+            bust::accounts::SeedVault {
+                funder: funder.pubkey(),
+                config: config(),
+                vault: vault(),
+                vault_tokens: vault_tokens(),
+                funder_tokens: tokens,
+                usdc_mint: self.mint,
+                token_program: spl_token::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[&funder]).unwrap();
     }
 
     pub fn admin_ix(&self, data: Vec<u8>) -> Instruction {

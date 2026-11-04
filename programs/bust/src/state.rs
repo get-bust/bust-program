@@ -94,3 +94,11 @@ pub struct Vault {
     pub bump: u8,
     pub tokens_bump: u8,
 }
+
+#[account]
+#[derive(InitSpace)]
+pub struct UserAccount {
+    pub owner: Pubkey,
+    pub balance: u64,
+    pub bump: u8,
+}
