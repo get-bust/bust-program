@@ -21,3 +21,6 @@ pub const PRICE_EXPONENT: i32 = -8;
 pub const PPM: u128 = 1_000_000;
 /// Fixed-point scale for intermediate values
 pub const SCALE: u128 = 1_000_000_000_000;
+
+/// Capacity of the FIFO queue of winnings the vault could not pay yet
+pub const QUEUE_CAPACITY: usize = 2048;

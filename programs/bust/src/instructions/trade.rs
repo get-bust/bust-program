@@ -260,14 +260,17 @@ struct Settlement {
     liquidated: bool,
     raw_pnl: i128,
     paid: u64,
+    queued: u64,
     fee: u64,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn settle(
     params: &Params,
     vault: &mut Vault,
     market: &mut Market,
     user: &mut UserAccount,
+    queue: &mut PayoutQueue,
     position: &Position,
     exit: u64,
     liquidate: bool,
@@ -279,33 +282,42 @@ fn settle(
     *oi = oi.saturating_sub(position.notional);
     vault.open_margin = vault.open_margin.checked_sub(position.margin).ok_or(PerpError::MathOverflow)?;
 
+    let queue_empty = vault.queue_total == 0;
     let raw = math::raw_pnl(position.side, position.entry_price, exit, position.notional);
     let margin = position.margin;
-    let mut s = Settlement { liquidated: false, raw_pnl: raw, paid: 0, fee: 0 };
+    let mut s = Settlement { liquidated: false, raw_pnl: raw, paid: 0, queued: 0, fee: 0 };
 
     if liquidate || math::is_bust(position.side, exit, position.bust_price) {
         // Hard bust: the whole margin goes to the vault
         s.liquidated = true;
-        s.fee = math::fee_of(margin, params.loss_fee_ppm);
+        s.fee = if queue_empty { math::fee_of(margin, params.loss_fee_ppm) } else { 0 };
         vault.cash = vault.cash.checked_add(margin - s.fee).ok_or(PerpError::MathOverflow)?;
     } else if raw < 0 {
         let loss = ((-raw) as u64).min(margin);
-        s.fee = math::fee_of(loss, params.loss_fee_ppm);
+        s.fee = if queue_empty { math::fee_of(loss, params.loss_fee_ppm) } else { 0 };
         vault.cash = vault.cash.checked_add(loss - s.fee).ok_or(PerpError::MathOverflow)?;
         s.paid = margin - loss;
     } else {
-        // Win: the margin always comes back, the profit comes from vault cash. A short vault pays what it has, without a fee
+        // Win: the margin always comes back, the profit comes from vault cash; what it cannot cover is queued (no fee)
         let win = math::win_breakdown(position.entry_price, exit, position.notional, market.position_multiplier_milli, params);
-        let profit = if vault.cash >= win.gain {
+        let profit = if queue_empty && vault.cash >= win.gain {
             vault.cash -= win.gain;
             s.fee = win.fee;
             win.net
-        } else {
+        } else if queue_empty {
             let partial = vault.cash.min(win.net);
             vault.cash -= partial;
             partial
+        } else {
+            0
         };
+        s.queued = win.net - profit;
         s.paid = margin + profit;
+        if s.queued > 0 {
+            require!(queue.push(position.owner, s.queued), PerpError::QueueFull);
+            vault.queue_total = vault.queue_total.checked_add(s.queued).ok_or(PerpError::MathOverflow)?;
+            user.queued = user.queued.checked_add(s.queued).ok_or(PerpError::MathOverflow)?;
+        }
     }
 
     vault.fees_accrued = vault.fees_accrued.checked_add(s.fee).ok_or(PerpError::MathOverflow)?;
@@ -323,6 +335,7 @@ fn emit_closed(position: &Account<Position>, exit: u64, s: &Settlement) {
         exit_price: exit,
         raw_pnl: s.raw_pnl as i64,
         paid: s.paid,
+        queued: s.queued,
         fee: s.fee,
     });
 }
@@ -361,6 +374,8 @@ pub struct ExecuteClose<'info> {
         bump = position.bump,
     )]
     pub position: Account<'info, Position>,
+    #[account(mut, address = config.queue)]
+    pub queue: AccountLoader<'info, PayoutQueue>,
     pub price_update: Account<'info, PriceUpdateV2>,
 }
 
@@ -368,15 +383,18 @@ pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
     let params = ctx.accounts.config.params;
     let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params)?;
     check_fill_window(&read, ctx.accounts.order.requested_at, &params)?;
+    let mut queue = ctx.accounts.queue.load_mut()?;
     let s = settle(
         &params,
         &mut ctx.accounts.vault,
         &mut ctx.accounts.market,
         &mut ctx.accounts.user,
+        &mut queue,
         &ctx.accounts.position,
         read.price,
         false,
     )?;
+    drop(queue);
     emit_closed(&ctx.accounts.position, read.price, &s);
     Ok(())
 }
@@ -441,6 +459,8 @@ pub struct Liquidate<'info> {
         bump = position.bump,
     )]
     pub position: Account<'info, Position>,
+    #[account(mut, address = config.queue)]
+    pub queue: AccountLoader<'info, PayoutQueue>,
     pub price_update: Account<'info, PriceUpdateV2>,
 }
 
@@ -449,8 +469,18 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params)?;
     let position = &ctx.accounts.position;
     require!(math::is_bust(position.side, read.price, position.bust_price), PerpError::NotLiquidatable);
-    let s =
-        settle(&params, &mut ctx.accounts.vault, &mut ctx.accounts.market, &mut ctx.accounts.user, position, read.price, true)?;
+    let mut queue = ctx.accounts.queue.load_mut()?;
+    let s = settle(
+        &params,
+        &mut ctx.accounts.vault,
+        &mut ctx.accounts.market,
+        &mut ctx.accounts.user,
+        &mut queue,
+        position,
+        read.price,
+        true,
+    )?;
+    drop(queue);
     emit_closed(&ctx.accounts.position, read.price, &s);
     Ok(())
 }

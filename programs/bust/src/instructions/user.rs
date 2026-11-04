@@ -27,6 +27,7 @@ pub fn handle_create_user(ctx: Context<CreateUser>) -> Result<()> {
         owner: ctx.accounts.owner.key(),
         balance: 0,
         reserved: 0,
+        queued: 0,
         session_key: Pubkey::default(),
         session_expires_at: 0,
         next_position_id: 0,

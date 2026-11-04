@@ -25,7 +25,14 @@ pub struct PositionClosed {
     pub raw_pnl: i64,
     /// Credited to the balance right away, margin included
     pub paid: u64,
+    pub queued: u64,
     pub fee: u64,
+}
+
+#[event]
+pub struct QueuePaid {
+    pub owner: Pubkey,
+    pub amount: u64,
 }
 
 #[event]

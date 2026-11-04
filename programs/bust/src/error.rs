@@ -20,6 +20,10 @@ pub enum PerpError {
     PriceConfidence,
     #[msg("Position is not liquidatable at this price")]
     NotLiquidatable,
+    #[msg("Payout queue is full")]
+    QueueFull,
+    #[msg("Remaining accounts do not match the payout queue")]
+    QueueAccountMismatch,
     #[msg("Session expiry out of range")]
     InvalidSession,
     #[msg("Invalid config parameter")]

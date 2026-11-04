@@ -87,4 +87,8 @@ pub mod bust {
     pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
         instructions::trade::handle_liquidate(ctx)
     }
+
+    pub fn harvest<'info>(ctx: Context<'info, Harvest<'info>>) -> Result<()> {
+        instructions::queue::handle_harvest(ctx)
+    }
 }

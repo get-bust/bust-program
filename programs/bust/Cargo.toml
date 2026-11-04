@@ -23,6 +23,8 @@ custom-panic = []
 anchor-lang = "1.2.1"
 anchor-spl = "1.2.1"
 pyth-solana-receiver-sdk = "2.0.0"
+# Pod for [QueueEntry; 2048] (anchor zero_copy)
+bytemuck = { version = "1", features = ["min_const_generics"] }
 
 [dev-dependencies]
 litesvm = "0.10.0"

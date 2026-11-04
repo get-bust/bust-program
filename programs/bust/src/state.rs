@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 
+use crate::constants::QUEUE_CAPACITY;
+
 /// Tunable parameters (rates in ppm, ages in seconds)
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, Debug, PartialEq, Eq)]
 pub struct Params {
@@ -80,10 +82,13 @@ pub struct Config {
     pub admin: Pubkey,
     pub usdc_mint: Pubkey,
     pub params: Params,
+    /// The payout queue account (larger than 10 KB, created by the client)
+    pub queue: Pubkey,
     pub bump: u8,
 }
 
 /// Vault ledger. Invariant: vault_tokens balance = cash + user_balances + open_margin + fees_accrued.
+/// queue_total is owed to users and has no tokens behind it; harvest pays it as cash comes in.
 #[account]
 #[derive(InitSpace)]
 pub struct Vault {
@@ -91,14 +96,15 @@ pub struct Vault {
     pub user_balances: u64,
     pub open_margin: u64,
     pub fees_accrued: u64,
+    pub queue_total: u64,
     pub bump: u8,
     pub tokens_bump: u8,
 }
 
 impl Vault {
-    /// What the vault can lose (may go negative)
+    /// Vault net of the queue (may go negative)
     pub fn net_equity(&self) -> i128 {
-        self.cash as i128
+        self.cash as i128 - self.queue_total as i128
     }
 }
 
@@ -129,6 +135,7 @@ pub struct UserAccount {
     pub balance: u64,
     /// Margin locked in pending open orders (counted in user_balances)
     pub reserved: u64,
+    pub queued: u64,
     /// Pubkey::default() when there is no session
     pub session_key: Pubkey,
     pub session_expires_at: i64,
@@ -186,4 +193,47 @@ pub struct Position {
     /// Whoever paid the rent (relayer, keeper or user) gets it back on close
     pub rent_payer: Pubkey,
     pub bump: u8,
+}
+
+#[zero_copy]
+pub struct QueueEntry {
+    pub owner: Pubkey,
+    pub amount: u64,
+}
+
+/// FIFO ring buffer of winnings the vault could not pay.
+/// Larger than 10 KB, so the client creates the account and initialize binds it.
+#[account(zero_copy)]
+pub struct PayoutQueue {
+    pub head: u64,
+    pub len: u64,
+    pub entries: [QueueEntry; QUEUE_CAPACITY],
+}
+
+impl PayoutQueue {
+    pub const SPACE: usize = 8 + 8 + 8 + QUEUE_CAPACITY * (32 + 8);
+
+    pub fn push(&mut self, owner: Pubkey, amount: u64) -> bool {
+        if self.len as usize >= QUEUE_CAPACITY {
+            return false;
+        }
+        let slot = ((self.head + self.len) as usize) % QUEUE_CAPACITY;
+        self.entries[slot] = QueueEntry { owner, amount };
+        self.len += 1;
+        true
+    }
+
+    pub fn front_mut(&mut self) -> Option<&mut QueueEntry> {
+        if self.len == 0 {
+            return None;
+        }
+        Some(&mut self.entries[self.head as usize % QUEUE_CAPACITY])
+    }
+
+    pub fn pop(&mut self) {
+        if self.len > 0 {
+            self.head = (self.head + 1) % QUEUE_CAPACITY as u64;
+            self.len -= 1;
+        }
+    }
 }

@@ -183,22 +183,6 @@ fn partial_verification_needs_enough_signatures() {
 }
 
 #[test]
-fn a_short_vault_pays_what_it_has() {
-    let mut env = Env::new();
-    env.seed(usdc(100.0));
-    let t = env.trader(usdc(1_000.0));
-    let owner = t.kp.pubkey();
-
-    let pos = env.open(&owner, &t.kp, Side::Long, usdc(30.0), 2).unwrap();
-    env.close_at(&pos, &t.kp, 400.0).unwrap(); // ~160 profit, 100 in the vault
-    let v = env.vault_state();
-    assert_eq!(v.cash, 0);
-    assert_eq!(v.fees_accrued, 0, "no fee on a partial payout");
-    assert_eq!(env.user_state(&owner).balance, usdc(1_100.0));
-    env.assert_invariant();
-}
-
-#[test]
 fn close_order_must_match_its_position() {
     let mut env = Env::new();
     env.seed(usdc(25_000.0));
@@ -225,6 +209,7 @@ fn close_order_must_match_its_position() {
             user: user_pda(&owner),
             order,
             position: b,
+            queue: env.queue,
             price_update: env.price,
         }
         .to_account_metas(None),

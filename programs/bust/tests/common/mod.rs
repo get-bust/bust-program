@@ -13,7 +13,7 @@ pub use {
         AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
     },
     anchor_spl::token::spl_token,
-    bust::{math, Params, Side},
+    bust::{math, Params, PayoutQueue, Side},
     litesvm::LiteSVM,
     pyth_solana_receiver_sdk::price_update::{PriceFeedMessage, PriceUpdateV2, VerificationLevel},
     solana_account::Account,
@@ -70,6 +70,7 @@ pub struct Env {
     pub svm: LiteSVM,
     pub admin: Keypair,
     pub mint: Pubkey,
+    pub queue: Pubkey,
     pub market: Pubkey,
     pub price: Pubkey,
     /// Chain clock (unix seconds) and the last price written
@@ -94,6 +95,7 @@ impl Env {
             svm,
             admin,
             mint: Pubkey::default(),
+            queue: Pubkey::default(),
             market: market_pda(0),
             price: Pubkey::new_unique(),
             now: NOW,
@@ -112,6 +114,17 @@ impl Env {
     }
 
     pub fn initialize(&mut self, params: Params) -> Result<(), String> {
+        // The queue account is larger than 10 KB: the client creates it, initialize binds it
+        let queue = Keypair::new();
+        self.queue = queue.pubkey();
+        let rent = self.svm.minimum_balance_for_rent_exemption(PayoutQueue::SPACE);
+        let create = system_instruction::create_account(
+            &self.admin.pubkey(),
+            &queue.pubkey(),
+            rent,
+            PayoutQueue::SPACE as u64,
+            &bust::id(),
+        );
         let ix = Instruction::new_with_bytes(
             bust::id(),
             &bust::instruction::Initialize { params }.data(),
@@ -121,13 +134,14 @@ impl Env {
                 config: config(),
                 vault: vault(),
                 vault_tokens: vault_tokens(),
+                queue: queue.pubkey(),
                 token_program: spl_token::ID,
                 system_program: system_program::ID,
             }
             .to_account_metas(None),
         );
         let admin = self.admin.insecure_clone();
-        self.send(&[ix], &[&admin])
+        self.send(&[create, ix], &[&admin, &queue])
     }
 
     pub fn send(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> Result<(), String> {
@@ -437,6 +451,7 @@ impl Env {
                 user: user_pda(&p.owner),
                 order: *order,
                 position: o.position,
+                queue: self.queue,
                 price_update: self.price,
             }
             .to_account_metas(None),
@@ -484,10 +499,19 @@ impl Env {
                 market: p.market,
                 user: user_pda(&p.owner),
                 position: *position,
+                queue: self.queue,
                 price_update: self.price,
             }
             .to_account_metas(None),
         );
+        self.send(&[ix], &[&keeper])
+    }
+
+    pub fn harvest(&mut self, owners: &[Pubkey]) -> Result<(), String> {
+        let keeper = self.caller();
+        let mut metas = bust::accounts::Harvest { config: config(), vault: vault(), queue: self.queue }.to_account_metas(None);
+        metas.extend(owners.iter().map(|o| AccountMeta::new(user_pda(o), false)));
+        let ix = Instruction::new_with_bytes(bust::id(), &bust::instruction::Harvest {}.data(), metas);
         self.send(&[ix], &[&keeper])
     }
 
