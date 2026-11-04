@@ -95,6 +95,12 @@ pub struct Vault {
     pub tokens_bump: u8,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, Debug, PartialEq, Eq)]
+pub enum Side {
+    Long,
+    Short,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct UserAccount {
