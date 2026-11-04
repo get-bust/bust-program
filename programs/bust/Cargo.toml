@@ -2,6 +2,7 @@
 name = "bust"
 version = "0.1.0"
 description = "Leveraged perpetuals traded against a USDC vault"
+license = "BUSL-1.1"
 edition.workspace = true
 rust-version.workspace = true
 
