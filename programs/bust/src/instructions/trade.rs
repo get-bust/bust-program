@@ -330,6 +330,37 @@ fn settle(
     Ok(s)
 }
 
+/// Writes the user's net result for the epoch and moves the epoch's total loss by the difference
+/// (a win reduces a loss in the same epoch). A freshly opened record gets its identity here.
+fn record_result(
+    distributor: &mut Distributor,
+    record: &mut EpochLoss,
+    owner: Pubkey,
+    rent_payer: Pubkey,
+    bump: u8,
+    margin: u64,
+    s: &Settlement,
+) -> Result<()> {
+    if record.owner == Pubkey::default() {
+        record.owner = owner;
+        record.epoch = distributor.epoch;
+        record.rent_payer = rent_payer;
+        record.bump = bump;
+    }
+    let before = record.loss();
+    let result = s.paid as i128 + s.queued as i128 - margin as i128;
+    let net = (record.net as i128 + result).clamp(i64::MIN as i128, i64::MAX as i128) as i64;
+    record.net = net;
+    let after = record.loss();
+    distributor.epoch_loss = if after >= before {
+        distributor.epoch_loss.checked_add(after - before)
+    } else {
+        distributor.epoch_loss.checked_sub(before - after)
+    }
+    .ok_or(PerpError::MathOverflow)?;
+    Ok(())
+}
+
 fn emit_closed(position: &Account<Position>, exit: u64, s: &Settlement) {
     emit!(PositionClosed {
         owner: position.owner,
@@ -348,6 +379,8 @@ fn emit_closed(position: &Account<Position>, exit: u64, s: &Settlement) {
 
 #[derive(Accounts)]
 pub struct ExecuteClose<'info> {
+    /// Pays the rent of the epoch loss record (gets it back on claim)
+    #[account(mut)]
     pub keeper: Signer<'info>,
     /// CHECK: Paid the order's rent (address stored on the order)
     #[account(mut, address = order.rent_payer)]
@@ -356,13 +389,13 @@ pub struct ExecuteClose<'info> {
     #[account(mut, address = position.rent_payer)]
     pub position_rent_payer: UncheckedAccount<'info>,
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
     #[account(mut, address = position.market)]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
     #[account(mut, seeds = [USER_SEED, position.owner.as_ref()], bump = user.bump)]
-    pub user: Account<'info, UserAccount>,
+    pub user: Box<Account<'info, UserAccount>>,
     #[account(
         mut,
         close = order_rent_payer,
@@ -370,17 +403,28 @@ pub struct ExecuteClose<'info> {
         bump = order.bump,
         constraint = order.kind == OrderKind::Close && order.position == position.key() @ PerpError::OrderMismatch,
     )]
-    pub order: Account<'info, OrderRequest>,
+    pub order: Box<Account<'info, OrderRequest>>,
     #[account(
         mut,
         close = position_rent_payer,
         seeds = [POSITION_SEED, position.owner.as_ref(), &position.id.to_le_bytes()],
         bump = position.bump,
     )]
-    pub position: Account<'info, Position>,
+    pub position: Box<Account<'info, Position>>,
     #[account(mut, address = config.queue)]
     pub queue: AccountLoader<'info, PayoutQueue>,
-    pub price_update: Account<'info, PriceUpdateV2>,
+    pub price_update: Box<Account<'info, PriceUpdateV2>>,
+    #[account(mut, seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
+    pub distributor: Box<Account<'info, Distributor>>,
+    #[account(
+        init_if_needed,
+        payer = keeper,
+        space = 8 + EpochLoss::INIT_SPACE,
+        seeds = [EPOCH_LOSS_SEED, position.owner.as_ref(), &distributor.epoch.to_le_bytes()],
+        bump,
+    )]
+    pub epoch_loss: Box<Account<'info, EpochLoss>>,
+    pub system_program: Program<'info, System>,
 }
 
 pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
@@ -399,6 +443,15 @@ pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
         false,
     )?;
     drop(queue);
+    record_result(
+        &mut ctx.accounts.distributor,
+        &mut ctx.accounts.epoch_loss,
+        ctx.accounts.position.owner,
+        ctx.accounts.keeper.key(),
+        ctx.bumps.epoch_loss,
+        ctx.accounts.position.margin,
+        &s,
+    )?;
     emit_closed(&ctx.accounts.position, read.price, &s);
     Ok(())
 }
@@ -449,23 +502,34 @@ pub struct Liquidate<'info> {
     #[account(mut, address = position.rent_payer)]
     pub rent_payer: UncheckedAccount<'info>,
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
     #[account(mut, address = position.market)]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
     #[account(mut, seeds = [USER_SEED, position.owner.as_ref()], bump = user.bump)]
-    pub user: Account<'info, UserAccount>,
+    pub user: Box<Account<'info, UserAccount>>,
     #[account(
         mut,
         close = rent_payer,
         seeds = [POSITION_SEED, position.owner.as_ref(), &position.id.to_le_bytes()],
         bump = position.bump,
     )]
-    pub position: Account<'info, Position>,
+    pub position: Box<Account<'info, Position>>,
     #[account(mut, address = config.queue)]
     pub queue: AccountLoader<'info, PayoutQueue>,
-    pub price_update: Account<'info, PriceUpdateV2>,
+    pub price_update: Box<Account<'info, PriceUpdateV2>>,
+    #[account(mut, seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
+    pub distributor: Box<Account<'info, Distributor>>,
+    #[account(
+        init_if_needed,
+        payer = keeper,
+        space = 8 + EpochLoss::INIT_SPACE,
+        seeds = [EPOCH_LOSS_SEED, position.owner.as_ref(), &distributor.epoch.to_le_bytes()],
+        bump,
+    )]
+    pub epoch_loss: Box<Account<'info, EpochLoss>>,
+    pub system_program: Program<'info, System>,
 }
 
 pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
@@ -485,6 +549,15 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         true,
     )?;
     drop(queue);
+    record_result(
+        &mut ctx.accounts.distributor,
+        &mut ctx.accounts.epoch_loss,
+        ctx.accounts.position.owner,
+        ctx.accounts.keeper.key(),
+        ctx.bumps.epoch_loss,
+        ctx.accounts.position.margin,
+        &s,
+    )?;
     emit_closed(&ctx.accounts.position, read.price, &s);
     Ok(())
 }

@@ -22,6 +22,18 @@ pub const STAKE_POOL_SEED: &[u8] = b"stake_pool";
 pub const STAKE_TOKENS_SEED: &[u8] = b"stake_tokens";
 #[constant]
 pub const STAKE_SEED: &[u8] = b"stake";
+#[constant]
+pub const TREASURY_SEED: &[u8] = b"treasury";
+#[constant]
+pub const TREASURY_TOKENS_SEED: &[u8] = b"treasury_tokens";
+#[constant]
+pub const XBUST_MINT_SEED: &[u8] = b"xbust_mint";
+#[constant]
+pub const EPOCH_SEED: &[u8] = b"epoch";
+#[constant]
+pub const EPOCH_LOSS_SEED: &[u8] = b"epoch_loss";
+#[constant]
+pub const VEST_SEED: &[u8] = b"vest";
 
 /// One day (s); open interest utilisation is tracked per day
 pub const DAY_SEC: i64 = 86_400;

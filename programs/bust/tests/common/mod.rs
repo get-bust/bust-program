@@ -62,6 +62,25 @@ pub fn stake_pda(owner: &Pubkey) -> Pubkey {
     pda(&[bust::STAKE_SEED, owner.as_ref()])
 }
 pub const UNSTAKE_SEC: i64 = 7 * 86_400;
+pub const VEST_SEC: i64 = 30 * 86_400;
+pub fn treasury() -> Pubkey {
+    pda(&[bust::TREASURY_SEED])
+}
+pub fn treasury_tokens() -> Pubkey {
+    pda(&[bust::TREASURY_TOKENS_SEED])
+}
+pub fn xbust_mint() -> Pubkey {
+    pda(&[bust::XBUST_MINT_SEED])
+}
+pub fn epoch_pda(epoch: u64) -> Pubkey {
+    pda(&[bust::EPOCH_SEED, &epoch.to_le_bytes()])
+}
+pub fn epoch_loss_pda(owner: &Pubkey, epoch: u64) -> Pubkey {
+    pda(&[bust::EPOCH_LOSS_SEED, owner.as_ref(), &epoch.to_le_bytes()])
+}
+pub fn vest_pda(owner: &Pubkey) -> Pubkey {
+    pda(&[bust::VEST_SEED, owner.as_ref()])
+}
 pub fn position_pda(owner: &Pubkey, id: u64) -> Pubkey {
     pda(&[bust::POSITION_SEED, owner.as_ref(), &id.to_le_bytes()])
 }
@@ -102,6 +121,8 @@ pub struct Env {
     pub buyback_tokens: Pubkey,
     pub dev_tokens: Pubkey,
     pub bust_mint: Pubkey,
+    /// Funds the treasury as the buyback authority
+    pub buyback: Keypair,
 }
 
 impl Env {
@@ -129,6 +150,7 @@ impl Env {
             buyback_tokens: Pubkey::default(),
             dev_tokens: Pubkey::default(),
             bust_mint: Pubkey::default(),
+            buyback: Keypair::new(),
         };
         let keeper = env.keeper.pubkey();
         env.svm.airdrop(&keeper, 10_000_000_000).unwrap();
@@ -166,6 +188,25 @@ impl Env {
                 bust_mint: env.bust_mint,
                 stake_pool: stake_pool(),
                 stake_tokens: stake_tokens(),
+                token_program: spl_token::ID,
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        env.send(&[init], &[&admin]).unwrap();
+
+        let buyback = env.buyback.pubkey();
+        env.svm.airdrop(&buyback, 1_000_000_000).unwrap();
+        let init = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::InitTreasury { vest_sec: VEST_SEC, buyback_authority: buyback }.data(),
+            bust::accounts::InitTreasury {
+                admin: admin.pubkey(),
+                config: config(),
+                bust_mint: env.bust_mint,
+                treasury: treasury(),
+                treasury_tokens: treasury_tokens(),
+                xbust_mint: xbust_mint(),
                 token_program: spl_token::ID,
                 system_program: system_program::ID,
             }
@@ -252,6 +293,7 @@ impl Env {
             ),
             spl_token::instruction::initialize_account3(&spl_token::ID, &acc.pubkey(), mint, owner).unwrap(),
         ];
+        // The xBUST mint authority is the treasury: open empty accounts without minting
         if amount > 0 {
             ixs.push(
                 spl_token::instruction::mint_to(&spl_token::ID, mint, &acc.pubkey(), &self.admin.pubkey(), &[], amount).unwrap(),
@@ -340,6 +382,7 @@ impl Env {
 
     pub fn distribute(&mut self) -> Result<(), String> {
         let c = self.caller();
+        let epoch = self.dist_state().epoch;
         let ix = Instruction::new_with_bytes(
             bust::id(),
             &bust::instruction::Distribute {}.data(),
@@ -348,6 +391,8 @@ impl Env {
                 vault: vault(),
                 distributor: distributor(),
                 stake_pool: stake_pool(),
+                epoch_record: epoch_pda(epoch),
+                system_program: system_program::ID,
             }
             .to_account_metas(None),
         );
@@ -460,6 +505,104 @@ impl Env {
     pub fn claim(&mut self, st: &Staker) -> Result<(), String> {
         let kp = st.kp.insecure_clone();
         self.claim_as(&kp, stake_pda(&st.kp.pubkey()), st.usdc)
+    }
+
+    /// The buyback authority (or `signer`) funds the epoch with $BUST
+    pub fn fund_epoch_as(&mut self, signer: &Keypair, epoch: u64, amount: u64) -> Result<(), String> {
+        let mint = self.bust_mint;
+        let src = self.token_account_of(&mint, &signer.pubkey(), amount);
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::FundEpoch { epoch, amount }.data(),
+            bust::accounts::FundEpoch {
+                authority: signer.pubkey(),
+                treasury: treasury(),
+                treasury_tokens: treasury_tokens(),
+                epoch_record: epoch_pda(epoch),
+                authority_bust: src,
+                bust_mint: mint,
+                token_program: spl_token::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[signer])
+    }
+
+    pub fn fund_epoch(&mut self, epoch: u64, amount: u64) -> Result<(), String> {
+        let bb = self.buyback.insecure_clone();
+        self.fund_epoch_as(&bb, epoch, amount)
+    }
+
+    pub fn xbust_account(&mut self, owner: &Pubkey) -> Pubkey {
+        self.token_account_of(&xbust_mint(), owner, 0)
+    }
+
+    pub fn claim_xbust(&mut self, owner: &Pubkey, epoch: u64, dest: Pubkey) -> Result<(), String> {
+        let rec: bust::EpochLoss = self.account(&epoch_loss_pda(owner, epoch));
+        self.claim_xbust_with(owner, epoch, dest, rec.rent_payer)
+    }
+
+    /// Claim once the record is closed (its rent payer is unknown, so the keeper is passed)
+    pub fn claim_xbust_closed(&mut self, owner: &Pubkey, epoch: u64, dest: Pubkey) -> Result<(), String> {
+        let keeper = self.keeper.pubkey();
+        self.claim_xbust_with(owner, epoch, dest, keeper)
+    }
+
+    fn claim_xbust_with(&mut self, owner: &Pubkey, epoch: u64, dest: Pubkey, rent_payer: Pubkey) -> Result<(), String> {
+        let c = self.caller();
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::ClaimXbust { epoch }.data(),
+            bust::accounts::ClaimXbust {
+                caller: c.pubkey(),
+                treasury: treasury(),
+                epoch_record: epoch_pda(epoch),
+                epoch_loss: epoch_loss_pda(owner, epoch),
+                rent_payer,
+                xbust_mint: xbust_mint(),
+                owner_xbust: dest,
+                token_program: spl_token::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[&c])
+    }
+
+    pub fn lock_xbust(&mut self, owner: &Keypair, xbust: Pubkey, amount: u64) -> Result<(), String> {
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::LockXbust { amount }.data(),
+            bust::accounts::LockXbust {
+                owner: owner.pubkey(),
+                treasury: treasury(),
+                vest: vest_pda(&owner.pubkey()),
+                xbust_mint: xbust_mint(),
+                owner_xbust: xbust,
+                token_program: spl_token::ID,
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[owner])
+    }
+
+    pub fn convert(&mut self, owner: &Keypair, bust_dest: Pubkey) -> Result<(), String> {
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::ConvertVested {}.data(),
+            bust::accounts::ConvertVested {
+                owner: owner.pubkey(),
+                treasury: treasury(),
+                treasury_tokens: treasury_tokens(),
+                vest: vest_pda(&owner.pubkey()),
+                xbust_mint: xbust_mint(),
+                bust_mint: self.bust_mint,
+                owner_bust: bust_dest,
+                token_program: spl_token::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[owner])
     }
 
     /// Moves one epoch ahead (the price is republished at the new time)
@@ -654,6 +797,9 @@ impl Env {
                 position: o.position,
                 queue: self.queue,
                 price_update: self.price,
+                distributor: distributor(),
+                epoch_loss: epoch_loss_pda(&p.owner, self.dist_state().epoch),
+                system_program: system_program::ID,
             }
             .to_account_metas(None),
         );
@@ -702,6 +848,9 @@ impl Env {
                 position: *position,
                 queue: self.queue,
                 price_update: self.price,
+                distributor: distributor(),
+                epoch_loss: epoch_loss_pda(&p.owner, self.dist_state().epoch),
+                system_program: system_program::ID,
             }
             .to_account_metas(None),
         );

@@ -45,6 +45,7 @@ pub fn handle_init_distributor(ctx: Context<InitDistributor>, params: DistParams
         dev_usdc: 0,
         buyback_tokens: ctx.accounts.buyback_tokens.key(),
         dev_tokens: ctx.accounts.dev_tokens.key(),
+        epoch_loss: 0,
         bump: ctx.bumps.distributor,
     });
     Ok(())
@@ -103,6 +104,8 @@ pub fn handle_record_utilization<'info>(ctx: Context<'info, RecordUtilization<'i
 
 #[derive(Accounts)]
 pub struct Distribute<'info> {
+    /// Pays the rent of the closing epoch's record
+    #[account(mut)]
     pub caller: Signer<'info>,
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
@@ -110,6 +113,16 @@ pub struct Distribute<'info> {
     pub distributor: Account<'info, Distributor>,
     #[account(mut, seeds = [STAKE_POOL_SEED], bump = stake_pool.bump)]
     pub stake_pool: Account<'info, StakePool>,
+    /// The closing epoch: its total net loss is fixed and xBUST is shared against it
+    #[account(
+        init,
+        payer = caller,
+        space = 8 + EpochRecord::INIT_SPACE,
+        seeds = [EPOCH_SEED, &distributor.epoch.to_le_bytes()],
+        bump,
+    )]
+    pub epoch_record: Account<'info, EpochRecord>,
+    pub system_program: Program<'info, System>,
 }
 
 /// With the queue empty: all fees and the (1 − u) part of profit above the high-water mark are split into four shares.
@@ -143,6 +156,15 @@ pub fn handle_distribute(ctx: Context<Distribute>) -> Result<()> {
     d.staker_usdc = d.staker_usdc.checked_add(s.staker).ok_or(PerpError::MathOverflow)?;
     d.xbust_usdc = d.xbust_usdc.checked_add(s.xbust).ok_or(PerpError::MathOverflow)?;
     d.dev_usdc = d.dev_usdc.checked_add(s.dev).ok_or(PerpError::MathOverflow)?;
+    ctx.accounts.epoch_record.set_inner(EpochRecord {
+        epoch: d.epoch,
+        total_loss: d.epoch_loss,
+        pool: 0,
+        funded: false,
+        claimed: 0,
+        bump: ctx.bumps.epoch_record,
+    });
+    d.epoch_loss = 0;
     d.epoch += 1;
     d.epoch_started_at = now;
 

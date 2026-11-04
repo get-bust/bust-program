@@ -169,6 +169,8 @@ pub struct Distributor {
     /// USDC token accounts of the buyback wallet (burn and xBUST purchases, a multisig) and the developer
     pub buyback_tokens: Pubkey,
     pub dev_tokens: Pubkey,
+    /// Sum of users' net losses this epoch (wins netted out); moves to the EpochRecord when the epoch closes
+    pub epoch_loss: u64,
     pub bump: u8,
 }
 
@@ -258,6 +260,81 @@ impl StakeAccount {
         self.rewards = self.rewards.checked_add(u64::try_from(earned).ok()?)?;
         self.reward_per_token_paid = pool.reward_per_token;
         Some(())
+    }
+}
+
+/// xBUST treasury: the $BUST bought for conversion sits here. Rate = treasury $BUST / (xBUST supply + locked xBUST)
+#[account]
+#[derive(InitSpace)]
+pub struct Treasury {
+    pub xbust_mint: Pubkey,
+    pub bust_mint: Pubkey,
+    /// Owner of the buyback wallet (a multisig on mainnet): the only one who can fund an epoch
+    pub buyback_authority: Pubkey,
+    /// xBUST locked (burned) but not yet converted to $BUST
+    pub total_locked: u64,
+    pub vest_sec: i64,
+    pub bump: u8,
+    pub tokens_bump: u8,
+    pub mint_bump: u8,
+}
+
+/// A closed epoch: total net loss and the $BUST put in the treasury for it (= the xBUST to be minted)
+#[account]
+#[derive(InitSpace)]
+pub struct EpochRecord {
+    pub epoch: u64,
+    pub total_loss: u64,
+    pub pool: u64,
+    pub funded: bool,
+    pub claimed: u64,
+    pub bump: u8,
+}
+
+/// A user's net result in one epoch (updated on close and liquidation). Closed when claimed
+#[account]
+#[derive(InitSpace)]
+pub struct EpochLoss {
+    pub owner: Pubkey,
+    pub epoch: u64,
+    /// Win +, loss − (USDC base units)
+    pub net: i64,
+    pub rent_payer: Pubkey,
+    pub bump: u8,
+}
+
+impl EpochLoss {
+    pub fn loss(&self) -> u64 {
+        if self.net < 0 {
+            self.net.unsigned_abs()
+        } else {
+            0
+        }
+    }
+}
+
+/// xBUST lock: the locked amount unlocks linearly over vest_sec. A new lock merges with what is left and restarts the clock;
+/// the part already unlocked by then is kept as `carried`
+#[account]
+#[derive(InitSpace)]
+pub struct Vest {
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub start: i64,
+    pub converted: u64,
+    pub carried: u64,
+    pub bump: u8,
+}
+
+impl Vest {
+    /// Unlocked so far (converted included)
+    pub fn vested(&self, now: i64, vest_sec: i64) -> u64 {
+        let elapsed = (now - self.start).clamp(0, vest_sec) as u128;
+        (self.amount as u128 * elapsed / vest_sec as u128) as u64
+    }
+
+    pub fn convertible(&self, now: i64, vest_sec: i64) -> u64 {
+        self.carried + self.vested(now, vest_sec) - self.converted
     }
 }
 

@@ -52,4 +52,10 @@ pub enum PerpError {
     NothingToWithdraw,
     #[msg("Unstaked tokens are still in the waiting period")]
     UnstakeNotReady,
+    #[msg("Epoch is already funded")]
+    EpochFunded,
+    #[msg("Epoch is not funded yet")]
+    EpochNotFunded,
+    #[msg("Signer is not the registered buyback authority")]
+    NotBuybackAuthority,
 }

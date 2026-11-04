@@ -211,6 +211,9 @@ fn close_order_must_match_its_position() {
             position: b,
             queue: env.queue,
             price_update: env.price,
+            distributor: distributor(),
+            epoch_loss: epoch_loss_pda(&owner, env.dist_state().epoch),
+            system_program: system_program::ID,
         }
         .to_account_metas(None),
     );

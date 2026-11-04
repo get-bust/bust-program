@@ -87,6 +87,31 @@ pub mod bust {
         instructions::staking::handle_claim_rewards(ctx)
     }
 
+    // ---------- xBUST (the losers' share; 1/30 of a lock becomes $BUST each day)
+    pub fn init_treasury(ctx: Context<InitTreasury>, vest_sec: i64, buyback_authority: Pubkey) -> Result<()> {
+        instructions::xbust::handle_init_treasury(ctx, vest_sec, buyback_authority)
+    }
+
+    pub fn update_treasury(ctx: Context<UpdateTreasury>, buyback_authority: Pubkey) -> Result<()> {
+        instructions::xbust::handle_update_treasury(ctx, buyback_authority)
+    }
+
+    pub fn fund_epoch(ctx: Context<FundEpoch>, epoch: u64, amount: u64) -> Result<()> {
+        instructions::xbust::handle_fund_epoch(ctx, epoch, amount)
+    }
+
+    pub fn claim_xbust(ctx: Context<ClaimXbust>, epoch: u64) -> Result<()> {
+        instructions::xbust::handle_claim_xbust(ctx, epoch)
+    }
+
+    pub fn lock_xbust(ctx: Context<LockXbust>, amount: u64) -> Result<()> {
+        instructions::xbust::handle_lock_xbust(ctx, amount)
+    }
+
+    pub fn convert_vested(ctx: Context<ConvertVested>) -> Result<()> {
+        instructions::xbust::handle_convert_vested(ctx)
+    }
+
     // ---------- accounts and funds
     pub fn create_user(ctx: Context<CreateUser>) -> Result<()> {
         instructions::user::handle_create_user(ctx)

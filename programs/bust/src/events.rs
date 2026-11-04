@@ -90,3 +90,33 @@ pub struct RewardsClaimed {
     pub owner: Pubkey,
     pub amount: u64,
 }
+
+#[event]
+pub struct EpochFundedEvent {
+    pub epoch: u64,
+    pub bust: u64,
+    pub total_loss: u64,
+}
+
+#[event]
+pub struct XbustClaimed {
+    pub owner: Pubkey,
+    pub epoch: u64,
+    pub loss: u64,
+    pub amount: u64,
+}
+
+#[event]
+pub struct XbustLocked {
+    pub owner: Pubkey,
+    pub amount: u64,
+    /// Total still in the lock (not yet unlocked + unlocked but not converted)
+    pub locked: u64,
+}
+
+#[event]
+pub struct XbustConverted {
+    pub owner: Pubkey,
+    pub xbust: u64,
+    pub bust: u64,
+}
