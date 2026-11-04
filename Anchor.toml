@@ -6,10 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-bust = "8P7m2ChjnNtEbvVyHGKkBtfYP2AVG9ktsFEyvQrmcAiw"
+bust = "D8NuzCShwAFisDwFWWTh8txwqe4LC8N8CKnEuuX1VWvD"
 
 [programs.devnet]
-bust = "8P7m2ChjnNtEbvVyHGKkBtfYP2AVG9ktsFEyvQrmcAiw"
+bust = "D8NuzCShwAFisDwFWWTh8txwqe4LC8N8CKnEuuX1VWvD"
 
 [provider]
 cluster = "localnet"

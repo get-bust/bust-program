@@ -11,7 +11,7 @@ pub use constants::*;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("8P7m2ChjnNtEbvVyHGKkBtfYP2AVG9ktsFEyvQrmcAiw");
+declare_id!("D8NuzCShwAFisDwFWWTh8txwqe4LC8N8CKnEuuX1VWvD");
 
 /// Leveraged perpetuals traded against a USDC vault.
 #[program]
