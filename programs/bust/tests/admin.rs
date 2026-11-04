@@ -50,3 +50,22 @@ fn config_rejects_invalid_params() {
     }
     assert_eq!(env.config_state().params, Params::DEFAULT);
 }
+
+#[test]
+fn admin_adds_markets_once_per_index() {
+    let mut env = Env::new();
+    let m: bust::Market = env.account(&env.market);
+    assert_eq!((m.index, m.feed_id, m.position_multiplier_milli), (0, FEED, ETH_MULT));
+    assert_eq!((m.oi_long, m.oi_short), (0, 0));
+
+    let admin = env.admin.insecure_clone();
+    assert!(env.add_market(&admin, 0, [9u8; 32], ETH_MULT).is_err());
+    expect_err(env.add_market(&admin, 1, [9u8; 32], 0), "InvalidConfig");
+
+    let stranger = env.caller();
+    expect_err(env.add_market(&stranger, 1, [9u8; 32], ETH_MULT), "ConstraintHasOne");
+
+    env.add_market(&admin, 1, [9u8; 32], 814_598).unwrap();
+    let m: bust::Market = env.account(&market_pda(1));
+    assert_eq!((m.index, m.feed_id), (1, [9u8; 32]));
+}

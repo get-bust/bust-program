@@ -7,6 +7,8 @@ pub const VAULT_SEED: &[u8] = b"vault";
 #[constant]
 pub const VAULT_TOKENS_SEED: &[u8] = b"vault_tokens";
 #[constant]
+pub const MARKET_SEED: &[u8] = b"market";
+#[constant]
 pub const USER_SEED: &[u8] = b"user";
 
 /// Prices are kept at 1e-8 (the exponent of Pyth's crypto feeds)

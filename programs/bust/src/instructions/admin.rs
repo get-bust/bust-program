@@ -60,3 +60,43 @@ pub fn handle_update_config(ctx: Context<AdminOnly>, params: Params) -> Result<(
     ctx.accounts.config.params = params;
     Ok(())
 }
+
+// ---------- add_market
+
+#[derive(Accounts)]
+#[instruction(index: u16)]
+pub struct AddMarket<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, Config>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + Market::INIT_SPACE,
+        seeds = [MARKET_SEED, &index.to_le_bytes()],
+        bump,
+    )]
+    pub market: Account<'info, Market>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn handle_add_market(
+    ctx: Context<AddMarket>,
+    index: u16,
+    symbol: [u8; 8],
+    feed_id: [u8; 32],
+    position_multiplier_milli: u64,
+) -> Result<()> {
+    require!(position_multiplier_milli > 0, PerpError::InvalidConfig);
+    ctx.accounts.market.set_inner(Market {
+        index,
+        symbol,
+        feed_id,
+        position_multiplier_milli,
+        oi_long: 0,
+        oi_short: 0,
+        bump: ctx.bumps.market,
+    });
+    Ok(())
+}

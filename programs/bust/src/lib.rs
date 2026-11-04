@@ -26,6 +26,16 @@ pub mod bust {
         instructions::admin::handle_update_config(ctx, params)
     }
 
+    pub fn add_market(
+        ctx: Context<AddMarket>,
+        index: u16,
+        symbol: [u8; 8],
+        feed_id: [u8; 32],
+        position_multiplier_milli: u64,
+    ) -> Result<()> {
+        instructions::admin::handle_add_market(ctx, index, symbol, feed_id, position_multiplier_milli)
+    }
+
     // ---------- accounts and funds
     pub fn create_user(ctx: Context<CreateUser>) -> Result<()> {
         instructions::user::handle_create_user(ctx)

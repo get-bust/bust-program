@@ -23,6 +23,8 @@ pub use {
 };
 
 pub const NOW: i64 = 1_800_000_000;
+pub const FEED: [u8; 32] = [7u8; 32];
+pub const ETH_MULT: u64 = 483_979;
 
 pub fn usdc(x: f64) -> u64 {
     (x * 1e6).round() as u64
@@ -39,6 +41,9 @@ pub fn vault() -> Pubkey {
 }
 pub fn vault_tokens() -> Pubkey {
     pda(&[bust::VAULT_TOKENS_SEED])
+}
+pub fn market_pda(index: u16) -> Pubkey {
+    pda(&[bust::MARKET_SEED, &index.to_le_bytes()])
 }
 pub fn user_pda(owner: &Pubkey) -> Pubkey {
     pda(&[bust::USER_SEED, owner.as_ref()])
@@ -58,6 +63,7 @@ pub struct Env {
     pub svm: LiteSVM,
     pub admin: Keypair,
     pub mint: Pubkey,
+    pub market: Pubkey,
     /// Chain clock (unix seconds)
     pub now: i64,
 }
@@ -73,9 +79,11 @@ impl Env {
 
         let admin = Keypair::new();
         svm.airdrop(&admin.pubkey(), 100_000_000_000).unwrap();
-        let mut env = Env { svm, admin, mint: Pubkey::default(), now: NOW };
+        let mut env = Env { svm, admin, mint: Pubkey::default(), market: market_pda(0), now: NOW };
         env.mint = env.create_mint();
         env.initialize(Params::DEFAULT).unwrap();
+        let admin = env.admin.insecure_clone();
+        env.add_market(&admin, 0, FEED, ETH_MULT).unwrap();
         env
     }
 
@@ -272,6 +280,21 @@ impl Env {
             &data,
             bust::accounts::AdminOnly { admin: self.admin.pubkey(), config: config() }.to_account_metas(None),
         )
+    }
+
+    pub fn add_market(&mut self, signer: &Keypair, index: u16, feed_id: [u8; 32], mult: u64) -> Result<(), String> {
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::AddMarket { index, symbol: *b"ETH\0\0\0\0\0", feed_id, position_multiplier_milli: mult }.data(),
+            bust::accounts::AddMarket {
+                admin: signer.pubkey(),
+                config: config(),
+                market: market_pda(index),
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[signer])
     }
 
     pub fn update_config(&mut self, signer: &Keypair, params: Params) -> Result<(), String> {

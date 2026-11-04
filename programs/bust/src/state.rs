@@ -95,6 +95,20 @@ pub struct Vault {
     pub tokens_bump: u8,
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct Market {
+    pub index: u16,
+    pub symbol: [u8; 8],
+    /// Pyth price feed id
+    pub feed_id: [u8; 32],
+    /// Size parameter of the impact haircut × 1000 (BTC 814.598 → 814_598)
+    pub position_multiplier_milli: u64,
+    pub oi_long: u64,
+    pub oi_short: u64,
+    pub bump: u8,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, Debug, PartialEq, Eq)]
 pub enum Side {
     Long,
