@@ -52,6 +52,16 @@ pub fn user_pda(owner: &Pubkey) -> Pubkey {
 pub fn distributor() -> Pubkey {
     pda(&[bust::DISTRIBUTOR_SEED])
 }
+pub fn stake_pool() -> Pubkey {
+    pda(&[bust::STAKE_POOL_SEED])
+}
+pub fn stake_tokens() -> Pubkey {
+    pda(&[bust::STAKE_TOKENS_SEED])
+}
+pub fn stake_pda(owner: &Pubkey) -> Pubkey {
+    pda(&[bust::STAKE_SEED, owner.as_ref()])
+}
+pub const UNSTAKE_SEC: i64 = 7 * 86_400;
 pub fn position_pda(owner: &Pubkey, id: u64) -> Pubkey {
     pda(&[bust::POSITION_SEED, owner.as_ref(), &id.to_le_bytes()])
 }
@@ -69,6 +79,13 @@ pub struct Trader {
     pub tokens: Pubkey,
 }
 
+pub struct Staker {
+    pub kp: Keypair,
+    /// $BUST token account
+    pub tokens: Pubkey,
+    pub usdc: Pubkey,
+}
+
 pub struct Env {
     pub svm: LiteSVM,
     pub admin: Keypair,
@@ -84,6 +101,7 @@ pub struct Env {
     /// Registered wallets the distribution shares go to
     pub buyback_tokens: Pubkey,
     pub dev_tokens: Pubkey,
+    pub bust_mint: Pubkey,
 }
 
 impl Env {
@@ -110,6 +128,7 @@ impl Env {
             keeper: Keypair::new(),
             buyback_tokens: Pubkey::default(),
             dev_tokens: Pubkey::default(),
+            bust_mint: Pubkey::default(),
         };
         let keeper = env.keeper.pubkey();
         env.svm.airdrop(&keeper, 10_000_000_000).unwrap();
@@ -131,6 +150,23 @@ impl Env {
                 buyback_tokens: env.buyback_tokens,
                 dev_tokens: env.dev_tokens,
                 usdc_mint: env.mint,
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        env.send(&[init], &[&admin]).unwrap();
+
+        env.bust_mint = env.create_mint();
+        let init = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::InitStakePool { unstake_sec: UNSTAKE_SEC }.data(),
+            bust::accounts::InitStakePool {
+                admin: admin.pubkey(),
+                config: config(),
+                bust_mint: env.bust_mint,
+                stake_pool: stake_pool(),
+                stake_tokens: stake_tokens(),
+                token_program: spl_token::ID,
                 system_program: system_program::ID,
             }
             .to_account_metas(None),
@@ -307,7 +343,13 @@ impl Env {
         let ix = Instruction::new_with_bytes(
             bust::id(),
             &bust::instruction::Distribute {}.data(),
-            bust::accounts::Distribute { caller: c.pubkey(), vault: vault(), distributor: distributor() }.to_account_metas(None),
+            bust::accounts::Distribute {
+                caller: c.pubkey(),
+                vault: vault(),
+                distributor: distributor(),
+                stake_pool: stake_pool(),
+            }
+            .to_account_metas(None),
         );
         self.send(&[ix], &[&c])
     }
@@ -338,6 +380,86 @@ impl Env {
             .to_account_metas(None),
         );
         self.send(&[ix], &[&c])
+    }
+
+    /// A staker with $BUST and a stake account
+    pub fn staker(&mut self, bust_amount: u64) -> Staker {
+        let kp = self.caller();
+        let mint = self.bust_mint;
+        let tokens = self.token_account_of(&mint, &kp.pubkey(), bust_amount);
+        let usdc = self.token_account(&kp.pubkey(), 0);
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::CreateStakeAccount {}.data(),
+            bust::accounts::CreateStakeAccount {
+                owner: kp.pubkey(),
+                payer: kp.pubkey(),
+                stake_account: stake_pda(&kp.pubkey()),
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[&kp]).unwrap();
+        Staker { kp, tokens, usdc }
+    }
+
+    pub fn move_stake_ix(&self, st: &Staker, data: Vec<u8>) -> Instruction {
+        Instruction::new_with_bytes(
+            bust::id(),
+            &data,
+            bust::accounts::MoveStake {
+                owner: st.kp.pubkey(),
+                stake_pool: stake_pool(),
+                stake_tokens: stake_tokens(),
+                stake_account: stake_pda(&st.kp.pubkey()),
+                owner_tokens: st.tokens,
+                bust_mint: self.bust_mint,
+                token_program: spl_token::ID,
+            }
+            .to_account_metas(None),
+        )
+    }
+
+    pub fn stake(&mut self, st: &Staker, amount: u64) -> Result<(), String> {
+        let ix = self.move_stake_ix(st, bust::instruction::Stake { amount }.data());
+        self.send(&[ix], &[&st.kp])
+    }
+
+    pub fn request_unstake(&mut self, st: &Staker, amount: u64) -> Result<(), String> {
+        let ix = self.move_stake_ix(st, bust::instruction::RequestUnstake { amount }.data());
+        self.send(&[ix], &[&st.kp])
+    }
+
+    pub fn withdraw_unstaked(&mut self, st: &Staker) -> Result<(), String> {
+        let ix = self.move_stake_ix(st, bust::instruction::WithdrawUnstaked {}.data());
+        self.send(&[ix], &[&st.kp])
+    }
+
+    /// The signer may point at `account` instead of its own stake account (attack tests)
+    pub fn claim_as(&mut self, signer: &Keypair, account: Pubkey, usdc_dest: Pubkey) -> Result<(), String> {
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::ClaimRewards {}.data(),
+            bust::accounts::ClaimRewards {
+                owner: signer.pubkey(),
+                config: config(),
+                vault: vault(),
+                vault_tokens: vault_tokens(),
+                distributor: distributor(),
+                stake_pool: stake_pool(),
+                stake_account: account,
+                owner_usdc: usdc_dest,
+                usdc_mint: self.mint,
+                token_program: spl_token::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[signer])
+    }
+
+    pub fn claim(&mut self, st: &Staker) -> Result<(), String> {
+        let kp = st.kp.insecure_clone();
+        self.claim_as(&kp, stake_pda(&st.kp.pubkey()), st.usdc)
     }
 
     /// Moves one epoch ahead (the price is republished at the new time)

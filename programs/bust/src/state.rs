@@ -192,6 +192,75 @@ impl Distributor {
     }
 }
 
+/// $BUST staking (Synthetix StakingRewards): each distribution's staker share streams second by second over one epoch.
+/// reward_per_token and reward_rate are scaled by SCALE (1e12). The USDC sits in the vault token account (Distributor::staker_usdc)
+#[account]
+#[derive(InitSpace)]
+pub struct StakePool {
+    pub bust_mint: Pubkey,
+    pub total_staked: u64,
+    /// USDC base units / s × SCALE
+    pub reward_rate: u128,
+    pub period_finish: i64,
+    pub last_update: i64,
+    /// USDC accrued per $BUST base unit × SCALE
+    pub reward_per_token: u128,
+    pub unstake_sec: i64,
+    pub bump: u8,
+    pub tokens_bump: u8,
+}
+
+impl StakePool {
+    /// Writes the reward streamed so far into reward_per_token
+    pub fn update(&mut self, now: i64) -> Option<()> {
+        let until = now.min(self.period_finish);
+        if self.total_staked > 0 && until > self.last_update {
+            let elapsed = (until - self.last_update) as u128;
+            let add = elapsed.checked_mul(self.reward_rate)? / self.total_staked as u128;
+            self.reward_per_token = self.reward_per_token.checked_add(add)?;
+        }
+        self.last_update = now.max(self.last_update);
+        Some(())
+    }
+
+    /// Spreads a new reward (plus what is still streaming) over the next `duration` seconds. Call update first
+    pub fn notify(&mut self, amount: u64, now: i64, duration: i64) -> Option<()> {
+        let mut total = (amount as u128).checked_mul(crate::constants::SCALE)?;
+        if now < self.period_finish {
+            total = total.checked_add((self.period_finish - now) as u128 * self.reward_rate)?;
+        }
+        self.reward_rate = total / duration as u128;
+        self.period_finish = now.checked_add(duration)?;
+        self.last_update = now;
+        Some(())
+    }
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct StakeAccount {
+    pub owner: Pubkey,
+    pub staked: u64,
+    pub reward_per_token_paid: u128,
+    /// Unclaimed USDC
+    pub rewards: u64,
+    /// $BUST in the waiting period (earns nothing)
+    pub pending_unstake: u64,
+    pub unstake_at: i64,
+    pub bump: u8,
+}
+
+impl StakeAccount {
+    /// Credits what was earned up to the pool's current reward_per_token
+    pub fn settle(&mut self, pool: &StakePool) -> Option<()> {
+        let delta = pool.reward_per_token.checked_sub(self.reward_per_token_paid)?;
+        let earned = (self.staked as u128).checked_mul(delta)? / crate::constants::SCALE;
+        self.rewards = self.rewards.checked_add(u64::try_from(earned).ok()?)?;
+        self.reward_per_token_paid = pool.reward_per_token;
+        Some(())
+    }
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Market {

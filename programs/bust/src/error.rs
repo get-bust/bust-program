@@ -50,4 +50,6 @@ pub enum PerpError {
     InvalidDestination,
     #[msg("Nothing to withdraw")]
     NothingToWithdraw,
+    #[msg("Unstaked tokens are still in the waiting period")]
+    UnstakeNotReady,
 }

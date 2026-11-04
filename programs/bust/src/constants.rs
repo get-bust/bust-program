@@ -16,6 +16,12 @@ pub const POSITION_SEED: &[u8] = b"position";
 pub const ORDER_SEED: &[u8] = b"order";
 #[constant]
 pub const DISTRIBUTOR_SEED: &[u8] = b"distributor";
+#[constant]
+pub const STAKE_POOL_SEED: &[u8] = b"stake_pool";
+#[constant]
+pub const STAKE_TOKENS_SEED: &[u8] = b"stake_tokens";
+#[constant]
+pub const STAKE_SEED: &[u8] = b"stake";
 
 /// One day (s); open interest utilisation is tracked per day
 pub const DAY_SEC: i64 = 86_400;

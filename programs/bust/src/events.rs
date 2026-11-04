@@ -70,3 +70,23 @@ pub struct BucketWithdrawn {
     pub amount: u64,
     pub destination: Pubkey,
 }
+
+#[event]
+pub struct Staked {
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub total_staked: u64,
+}
+
+#[event]
+pub struct UnstakeRequested {
+    pub owner: Pubkey,
+    pub amount: u64,
+    pub available_at: i64,
+}
+
+#[event]
+pub struct RewardsClaimed {
+    pub owner: Pubkey,
+    pub amount: u64,
+}

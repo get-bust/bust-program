@@ -108,6 +108,8 @@ pub struct Distribute<'info> {
     pub vault: Account<'info, Vault>,
     #[account(mut, seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
     pub distributor: Account<'info, Distributor>,
+    #[account(mut, seeds = [STAKE_POOL_SEED], bump = stake_pool.bump)]
+    pub stake_pool: Account<'info, StakePool>,
 }
 
 /// With the queue empty: all fees and the (1 − u) part of profit above the high-water mark are split into four shares.
@@ -124,9 +126,15 @@ pub fn handle_distribute(ctx: Context<Distribute>) -> Result<()> {
     let keep = d.peak_util(today).clamp(d.params.keep_min_ppm, d.params.keep_max_ppm);
     let mut s = math::split(profit, vault.fees_accrued, keep, &d.params);
 
-    // Nothing streams the staker share yet: it goes to the burn
-    s.burn += s.staker;
-    s.staker = 0;
+    // The staker share streams over one epoch; with nobody staked it goes to the burn instead of sitting idle
+    let pool = &mut ctx.accounts.stake_pool;
+    pool.update(now).ok_or(PerpError::MathOverflow)?;
+    if pool.total_staked == 0 {
+        s.burn += s.staker;
+        s.staker = 0;
+    } else if s.staker > 0 {
+        pool.notify(s.staker, now, d.params.epoch_sec).ok_or(PerpError::MathOverflow)?;
+    }
 
     vault.cash -= s.from_cash;
     vault.fees_accrued = 0;

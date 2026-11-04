@@ -62,6 +62,31 @@ pub mod bust {
         instructions::distribution::handle_withdraw_bucket(ctx, bucket)
     }
 
+    // ---------- $BUST staking (the staker share streams as USDC)
+    pub fn init_stake_pool(ctx: Context<InitStakePool>, unstake_sec: i64) -> Result<()> {
+        instructions::staking::handle_init_stake_pool(ctx, unstake_sec)
+    }
+
+    pub fn create_stake_account(ctx: Context<CreateStakeAccount>) -> Result<()> {
+        instructions::staking::handle_create_stake_account(ctx)
+    }
+
+    pub fn stake(ctx: Context<MoveStake>, amount: u64) -> Result<()> {
+        instructions::staking::handle_stake(ctx, amount)
+    }
+
+    pub fn request_unstake(ctx: Context<MoveStake>, amount: u64) -> Result<()> {
+        instructions::staking::handle_request_unstake(ctx, amount)
+    }
+
+    pub fn withdraw_unstaked(ctx: Context<MoveStake>) -> Result<()> {
+        instructions::staking::handle_withdraw_unstaked(ctx)
+    }
+
+    pub fn claim_rewards(ctx: Context<ClaimRewards>) -> Result<()> {
+        instructions::staking::handle_claim_rewards(ctx)
+    }
+
     // ---------- accounts and funds
     pub fn create_user(ctx: Context<CreateUser>) -> Result<()> {
         instructions::user::handle_create_user(ctx)
