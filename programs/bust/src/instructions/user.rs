@@ -104,7 +104,7 @@ pub fn handle_withdraw(ctx: Context<MoveFunds>, amount: u64) -> Result<()> {
     )
 }
 
-// ---------- seed_vault (capital and donations)
+// ---------- seed_vault (LaunchLab fees and donations)
 
 #[derive(Accounts)]
 pub struct SeedVault<'info> {
@@ -113,6 +113,9 @@ pub struct SeedVault<'info> {
     pub config: Account<'info, Config>,
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
+    /// The high-water mark rises too, so capital put in is never distributed as profit
+    #[account(mut, seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
+    pub distributor: Account<'info, Distributor>,
     #[account(mut, seeds = [VAULT_TOKENS_SEED], bump = vault.tokens_bump)]
     pub vault_tokens: Account<'info, TokenAccount>,
     #[account(mut, token::mint = usdc_mint, token::authority = funder)]
@@ -138,6 +141,8 @@ pub fn handle_seed_vault(ctx: Context<SeedVault>, amount: u64) -> Result<()> {
     )?;
     let vault = &mut ctx.accounts.vault;
     vault.cash = vault.cash.checked_add(amount).ok_or(PerpError::MathOverflow)?;
+    let d = &mut ctx.accounts.distributor;
+    d.cash_mark = d.cash_mark.checked_add(amount).ok_or(PerpError::MathOverflow)?;
     Ok(())
 }
 

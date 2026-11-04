@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::QUEUE_CAPACITY;
+use crate::constants::{DAY_SEC, QUEUE_CAPACITY};
 
 /// Tunable parameters (rates in ppm, ages in seconds)
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, Debug, PartialEq, Eq)]
@@ -107,6 +107,88 @@ impl Vault {
     /// Vault net of the queue (may go negative)
     pub fn net_equity(&self) -> i128 {
         self.cash as i128 - self.queue_total as i128
+    }
+}
+
+/// Epoch distribution. Rates in ppm; the four shares sum to 1e6
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, Debug, PartialEq, Eq)]
+pub struct DistParams {
+    pub epoch_sec: i64,
+    pub burn_ppm: u32,
+    pub staker_ppm: u32,
+    pub xbust_ppm: u32,
+    pub dev_ppm: u32,
+    /// Share of vault profit that stays in the vault: u = peak open interest utilisation of the last 7 days,
+    /// clamped to this range
+    pub keep_min_ppm: u32,
+    pub keep_max_ppm: u32,
+}
+
+impl DistParams {
+    pub const DEFAULT: DistParams = DistParams {
+        epoch_sec: DAY_SEC,
+        burn_ppm: 400_000,
+        staker_ppm: 300_000,
+        xbust_ppm: 150_000,
+        dev_ppm: 150_000,
+        keep_min_ppm: 200_000,
+        keep_max_ppm: 800_000,
+    };
+
+    pub fn validate(&self) -> bool {
+        let sum = self.burn_ppm as u64 + self.staker_ppm as u64 + self.xbust_ppm as u64 + self.dev_ppm as u64;
+        self.epoch_sec > 0 && sum == 1_000_000 && self.keep_min_ppm <= self.keep_max_ppm && self.keep_max_ppm <= 1_000_000
+    }
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, Debug, PartialEq, Eq)]
+pub enum Bucket {
+    Burn,
+    Staker,
+    Xbust,
+    Dev,
+}
+
+/// Epoch distribution state. Distributed USDC stays in the vault token account until withdrawn, so the invariant is:
+/// vault_tokens balance = cash + user_balances + open_margin + fees_accrued + Distributor::buckets()
+#[account]
+#[derive(InitSpace)]
+pub struct Distributor {
+    pub params: DistParams,
+    pub epoch: u64,
+    pub epoch_started_at: i64,
+    /// Vault cash after the last distribution (high-water mark); profit is what sits above it. seed_vault raises it too
+    pub cash_mark: u64,
+    /// Peak open interest utilisation (ppm) per day and the day number; a 7-day ring
+    pub util_ppm: [u32; 7],
+    pub util_day: [i64; 7],
+    pub burn_usdc: u64,
+    pub staker_usdc: u64,
+    pub xbust_usdc: u64,
+    pub dev_usdc: u64,
+    /// USDC token accounts of the buyback wallet (burn and xBUST purchases, a multisig) and the developer
+    pub buyback_tokens: Pubkey,
+    pub dev_tokens: Pubkey,
+    pub bump: u8,
+}
+
+impl Distributor {
+    pub fn buckets(&self) -> u64 {
+        self.burn_usdc + self.staker_usdc + self.xbust_usdc + self.dev_usdc
+    }
+
+    /// Peak utilisation of the last 7 days
+    pub fn peak_util(&self, today: i64) -> u32 {
+        (0..7).filter(|&i| self.util_day[i] > today - 7).map(|i| self.util_ppm[i]).max().unwrap_or(0)
+    }
+
+    pub fn record_util(&mut self, today: i64, util_ppm: u32) {
+        let slot = today.rem_euclid(7) as usize;
+        if self.util_day[slot] != today {
+            self.util_day[slot] = today;
+            self.util_ppm[slot] = 0;
+        }
+        self.util_ppm[slot] = self.util_ppm[slot].max(util_ppm);
     }
 }
 

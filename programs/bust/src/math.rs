@@ -2,7 +2,7 @@
 //! Prices are 1e-8, amounts USDC base units, rates ppm; intermediate values are u128 / SCALE (1e12).
 
 use crate::constants::{PPM, SCALE};
-use crate::state::{Params, Side};
+use crate::state::{DistParams, Params, Side};
 
 const PPM_TO_SCALE: u128 = SCALE / PPM;
 
@@ -81,6 +81,37 @@ pub fn win_breakdown(entry: u64, exit: u64, notional: u64, position_multiplier_m
     WinBreakdown { gain: gain as u64, fee: fee as u64, net: (gain - fee) as u64 }
 }
 
+/// Epoch distribution: the (1 − keep) part of vault profit and all fees are split into four shares
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Split {
+    /// Profit taken out of vault cash
+    pub from_cash: u64,
+    pub pool: u64,
+    pub burn: u64,
+    pub staker: u64,
+    pub xbust: u64,
+    pub dev: u64,
+}
+
+pub fn split(profit: u64, fees: u64, keep_ppm: u32, p: &DistParams) -> Split {
+    let from_cash = (profit as u128 * (PPM - keep_ppm as u128) / PPM) as u64;
+    let pool = from_cash as u128 + fees as u128;
+    let part = |ppm: u32| (pool * ppm as u128 / PPM) as u64;
+    let (burn, staker, xbust) = (part(p.burn_ppm), part(p.staker_ppm), part(p.xbust_ppm));
+    // the rounding remainder goes to the developer: the shares always add up to the pool
+    let dev = pool as u64 - burn - staker - xbust;
+    Split { from_cash, pool: pool as u64, burn, staker, xbust, dev }
+}
+
+/// The fuller side of a market / the open interest cap (ppm, at most 1e6). With a zero cap, any open interest counts as full
+pub fn utilization(oi_long: u64, oi_short: u64, cap: u64) -> u32 {
+    let oi = oi_long.max(oi_short) as u128;
+    if cap == 0 {
+        return if oi > 0 { PPM as u32 } else { 0 };
+    }
+    (oi * PPM / cap as u128).min(PPM) as u32
+}
+
 /// Open interest cap per market and side: max(0, net vault) × ratio
 pub fn oi_cap(net_equity: i128, ratio_ppm: u32) -> u64 {
     if net_equity <= 0 {
@@ -153,6 +184,29 @@ mod tests {
     fn raw_pnl_signs() {
         assert_eq!(raw_pnl(Side::Long, px(100.0), px(101.0), usdc(1000.0)), usdc(10.0) as i128);
         assert_eq!(raw_pnl(Side::Short, px(100.0), px(101.0), usdc(1000.0)), -(usdc(10.0) as i128));
+    }
+
+    #[test]
+    fn split_sums_to_pool_and_keeps_share() {
+        let p = DistParams::DEFAULT;
+        // 1000 profit, 20% stays: 800 leaves the vault; with 100 in fees the pool is 900
+        let s = split(1_000_000_000, 100_000_000, 200_000, &p);
+        assert_eq!(s.from_cash, 800_000_000);
+        assert_eq!(s.pool, 900_000_000);
+        assert_eq!((s.burn, s.staker, s.xbust, s.dev), (360_000_000, 270_000_000, 135_000_000, 135_000_000));
+        // no rounding remainder is lost
+        let s = split(7, 3, 333_333, &p);
+        assert_eq!(s.burn + s.staker + s.xbust + s.dev, s.pool);
+        // without profit only the fees are split
+        assert_eq!(split(0, 50, 800_000, &p).pool, 50);
+    }
+
+    #[test]
+    fn utilization_is_capped() {
+        assert_eq!(utilization(30, 60, 100), 600_000);
+        assert_eq!(utilization(500, 0, 100), 1_000_000);
+        assert_eq!(utilization(1, 0, 0), 1_000_000);
+        assert_eq!(utilization(0, 0, 0), 0);
     }
 
     #[test]

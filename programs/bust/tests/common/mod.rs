@@ -13,7 +13,7 @@ pub use {
         AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
     },
     anchor_spl::token::spl_token,
-    bust::{math, Params, PayoutQueue, Side},
+    bust::{math, Bucket, DistParams, Params, PayoutQueue, Side},
     litesvm::LiteSVM,
     pyth_solana_receiver_sdk::price_update::{PriceFeedMessage, PriceUpdateV2, VerificationLevel},
     solana_account::Account,
@@ -49,6 +49,9 @@ pub fn market_pda(index: u16) -> Pubkey {
 pub fn user_pda(owner: &Pubkey) -> Pubkey {
     pda(&[bust::USER_SEED, owner.as_ref()])
 }
+pub fn distributor() -> Pubkey {
+    pda(&[bust::DISTRIBUTOR_SEED])
+}
 pub fn position_pda(owner: &Pubkey, id: u64) -> Pubkey {
     pda(&[bust::POSITION_SEED, owner.as_ref(), &id.to_le_bytes()])
 }
@@ -78,6 +81,9 @@ pub struct Env {
     pub last_price: f64,
     pub level: VerificationLevel,
     pub keeper: Keypair,
+    /// Registered wallets the distribution shares go to
+    pub buyback_tokens: Pubkey,
+    pub dev_tokens: Pubkey,
 }
 
 impl Env {
@@ -102,6 +108,8 @@ impl Env {
             last_price: 100.0,
             level: VerificationLevel::Full,
             keeper: Keypair::new(),
+            buyback_tokens: Pubkey::default(),
+            dev_tokens: Pubkey::default(),
         };
         let keeper = env.keeper.pubkey();
         env.svm.airdrop(&keeper, 10_000_000_000).unwrap();
@@ -109,6 +117,25 @@ impl Env {
         env.initialize(Params::DEFAULT).unwrap();
         let admin = env.admin.insecure_clone();
         env.add_market(&admin, 0, FEED, ETH_MULT).unwrap();
+
+        env.buyback_tokens = env.token_account(&Pubkey::new_unique(), 0);
+        env.dev_tokens = env.token_account(&Pubkey::new_unique(), 0);
+        let init = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::InitDistributor { params: DistParams::DEFAULT }.data(),
+            bust::accounts::InitDistributor {
+                admin: env.admin.pubkey(),
+                config: config(),
+                vault: vault(),
+                distributor: distributor(),
+                buyback_tokens: env.buyback_tokens,
+                dev_tokens: env.dev_tokens,
+                usdc_mint: env.mint,
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+        );
+        env.send(&[init], &[&admin]).unwrap();
         env.set_price(100.0);
         env
     }
@@ -264,10 +291,61 @@ impl Env {
         self.account(&user_pda(owner))
     }
 
-    /// Ledger invariant: token balance = cash + user_balances + open_margin + fees_accrued
+    pub fn dist_state(&self) -> bust::Distributor {
+        self.account(&distributor())
+    }
+
+    /// Ledger invariant: token balance = cash + user_balances + open_margin + fees_accrued + distribution shares
     pub fn assert_invariant(&self) {
         let v = self.vault_state();
-        assert_eq!(self.token_balance(&vault_tokens()), v.cash + v.user_balances + v.open_margin + v.fees_accrued);
+        let d = self.dist_state();
+        assert_eq!(self.token_balance(&vault_tokens()), v.cash + v.user_balances + v.open_margin + v.fees_accrued + d.buckets());
+    }
+
+    pub fn distribute(&mut self) -> Result<(), String> {
+        let c = self.caller();
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::Distribute {}.data(),
+            bust::accounts::Distribute { caller: c.pubkey(), vault: vault(), distributor: distributor() }.to_account_metas(None),
+        );
+        self.send(&[ix], &[&c])
+    }
+
+    pub fn record_utilization(&mut self, markets: &[Pubkey]) -> Result<(), String> {
+        let c = self.caller();
+        let mut metas = bust::accounts::RecordUtilization { config: config(), vault: vault(), distributor: distributor() }
+            .to_account_metas(None);
+        metas.extend(markets.iter().map(|m| AccountMeta::new_readonly(*m, false)));
+        let ix = Instruction::new_with_bytes(bust::id(), &bust::instruction::RecordUtilization {}.data(), metas);
+        self.send(&[ix], &[&c])
+    }
+
+    pub fn withdraw_bucket(&mut self, bucket: Bucket, destination: Pubkey) -> Result<(), String> {
+        let c = self.caller();
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::WithdrawBucket { bucket }.data(),
+            bust::accounts::WithdrawBucket {
+                config: config(),
+                vault: vault(),
+                vault_tokens: vault_tokens(),
+                distributor: distributor(),
+                destination,
+                usdc_mint: self.mint,
+                token_program: spl_token::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[&c])
+    }
+
+    /// Moves one epoch ahead (the price is republished at the new time)
+    pub fn next_epoch(&mut self) {
+        let t = self.now + DistParams::DEFAULT.epoch_sec;
+        self.set_time(t);
+        let p = self.last_price;
+        self.set_price(p);
     }
 
     pub fn caller(&mut self) -> Keypair {
@@ -328,6 +406,7 @@ impl Env {
                 funder: funder.pubkey(),
                 config: config(),
                 vault: vault(),
+                distributor: distributor(),
                 vault_tokens: vault_tokens(),
                 funder_tokens: tokens,
                 usdc_mint: self.mint,

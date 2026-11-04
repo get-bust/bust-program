@@ -41,6 +41,27 @@ pub mod bust {
         instructions::admin::handle_add_market(ctx, index, symbol, feed_id, position_multiplier_milli)
     }
 
+    // ---------- epoch distribution
+    pub fn init_distributor(ctx: Context<InitDistributor>, params: DistParams) -> Result<()> {
+        instructions::distribution::handle_init_distributor(ctx, params)
+    }
+
+    pub fn update_distributor(ctx: Context<UpdateDistributor>, params: DistParams) -> Result<()> {
+        instructions::distribution::handle_update_distributor(ctx, params)
+    }
+
+    pub fn record_utilization<'info>(ctx: Context<'info, RecordUtilization<'info>>) -> Result<()> {
+        instructions::distribution::handle_record_utilization(ctx)
+    }
+
+    pub fn distribute(ctx: Context<Distribute>) -> Result<()> {
+        instructions::distribution::handle_distribute(ctx)
+    }
+
+    pub fn withdraw_bucket(ctx: Context<WithdrawBucket>, bucket: Bucket) -> Result<()> {
+        instructions::distribution::handle_withdraw_bucket(ctx, bucket)
+    }
+
     // ---------- accounts and funds
     pub fn create_user(ctx: Context<CreateUser>) -> Result<()> {
         instructions::user::handle_create_user(ctx)

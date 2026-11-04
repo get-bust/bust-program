@@ -42,4 +42,12 @@ pub enum PerpError {
     OrderNotExpired,
     #[msg("Order does not match the accounts")]
     OrderMismatch,
+    #[msg("Epoch has not ended yet")]
+    EpochNotOver,
+    #[msg("Payout queue must be empty")]
+    QueueNotEmpty,
+    #[msg("Destination does not match the registered wallet")]
+    InvalidDestination,
+    #[msg("Nothing to withdraw")]
+    NothingToWithdraw,
 }

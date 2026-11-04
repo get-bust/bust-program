@@ -14,6 +14,11 @@ pub const USER_SEED: &[u8] = b"user";
 pub const POSITION_SEED: &[u8] = b"position";
 #[constant]
 pub const ORDER_SEED: &[u8] = b"order";
+#[constant]
+pub const DISTRIBUTOR_SEED: &[u8] = b"distributor";
+
+/// One day (s); open interest utilisation is tracked per day
+pub const DAY_SEC: i64 = 86_400;
 
 /// Prices are kept at 1e-8 (the exponent of Pyth's crypto feeds)
 pub const PRICE_EXPONENT: i32 = -8;
