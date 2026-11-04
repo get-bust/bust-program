@@ -8,6 +8,7 @@ profit shared between $BUST stakers, a buyback, and the traders who lost.
 - [Overview](#overview)
 - [Accounts](#accounts)
 - [Instructions and who can call them](#instructions-and-who-can-call-them)
+- [Deposits](#deposits)
 - [Trading](#trading)
 - [Settlement](#settlement)
 - [Payout queue](#payout-queue)
@@ -61,6 +62,7 @@ Every account except the payout queue is a PDA of the program.
 | `PayoutQueue` | client-created (81,944 bytes) | FIFO ring of 2,048 unpaid wins |
 | `Market` | `market`, index (u16) | Pyth feed id, impact size parameter, open interest per side |
 | `UserAccount` | `user`, owner | balance, reserved and queued amounts, session key, order and position counters |
+| deposit address | `deposit`, owner | owns the user's deposit token account (usually its ATA); holds no data |
 | `OrderRequest` | `order`, owner, id | a pending open or close and the time it was requested |
 | `Position` | `position`, owner, id | side, margin, leverage, notional, entry and bust prices |
 | `Distributor` | `distributor` | epoch counter, high-water mark, 7-day utilisation ring, the four shares, epoch loss |
@@ -82,14 +84,28 @@ Every account except the payout queue is a PDA of the program.
 | Account owner | `create_user`, `deposit`, `withdraw`, `set_session`, `revoke_session`, `stake`, `request_unstake`, `withdraw_unstaked`, `claim_rewards`, `lock_xbust`, `convert_vested` |
 | Owner or session key | `request_open`, `request_close` |
 | Buyback authority | `fund_epoch` |
-| Anyone (keepers) | `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `claim_launch_fees`, `sweep_launch_fees`, `seed_vault` |
+| Anyone (keepers) | `sweep_deposit`, `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `claim_launch_fees`, `sweep_launch_fees`, `seed_vault` |
 
 The permissionless instructions cannot move money anywhere the program has not fixed in advance:
 `withdraw_bucket` pays only the registered wallets, `claim_xbust` mints only to the loser's account, and the
-fills and liquidations settle against the user's own account.
+fills, liquidations and deposit sweeps settle against the user's own account.
 
 A separate rent payer can sign `create_user`, `request_open` and `request_close`, so a relayer can sponsor
 users who hold no SOL. Rent always goes back to whoever paid it.
+
+## Deposits
+
+A user can deposit by signing `deposit` from their wallet, or by sending USDC to their **deposit address**, from
+an exchange or any other wallet. The deposit address is the associated token account of the PDA
+`["deposit", owner]`. `sweep_deposit` moves the whole balance of a USDC account owned by that PDA into the vault
+and credits the owner. It needs no signature from the owner, so a keeper sweeps new deposits as they arrive.
+
+The owner is taken from the user account and the PDA is derived from it, so a deposit can only ever be
+credited to the address's owner. Only USDC is swept; other tokens sent there stay where they are. Sweeping
+works while the program is paused.
+
+Some exchanges refuse to withdraw to a token account whose owner is a PDA; for those, the token account
+address itself is the one to give.
 
 ## Trading
 

@@ -146,6 +146,10 @@ pub mod bust {
         instructions::user::handle_withdraw(ctx, amount)
     }
 
+    pub fn sweep_deposit(ctx: Context<SweepDeposit>) -> Result<()> {
+        instructions::user::handle_sweep_deposit(ctx)
+    }
+
     pub fn seed_vault(ctx: Context<SeedVault>, amount: u64) -> Result<()> {
         instructions::user::handle_seed_vault(ctx, amount)
     }

@@ -39,6 +39,9 @@ pub const LAUNCH_CONFIG_SEED: &[u8] = b"launch_config";
 /// The wallet that claims the LaunchLab platform fee: a PDA of this program, which signs for it
 #[constant]
 pub const FEE_WALLET_SEED: &[u8] = b"fee_wallet";
+/// A user's deposit address: a PDA per owner; any USDC token account it owns is swept into that owner's balance
+#[constant]
+pub const DEPOSIT_SEED: &[u8] = b"deposit";
 
 /// Allowed Raydium LaunchLab programs (mainnet, devnet). The admin cannot point at any other program:
 /// if it could, that program could drain fee accounts with the fee wallet PDA's signature

@@ -129,3 +129,9 @@ pub struct XbustConverted {
     pub xbust: u64,
     pub bust: u64,
 }
+
+#[event]
+pub struct DepositSwept {
+    pub owner: Pubkey,
+    pub amount: u64,
+}

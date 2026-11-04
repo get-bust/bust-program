@@ -43,6 +43,9 @@ pub fn vault() -> Pubkey {
 pub fn vault_tokens() -> Pubkey {
     pda(&[bust::VAULT_TOKENS_SEED])
 }
+pub fn deposit_pda(owner: &Pubkey) -> Pubkey {
+    pda(&[bust::DEPOSIT_SEED, owner.as_ref()])
+}
 pub fn market_pda(index: u16) -> Pubkey {
     pda(&[bust::MARKET_SEED, &index.to_le_bytes()])
 }
@@ -660,6 +663,31 @@ impl Env {
         let data =
             if deposit { bust::instruction::Deposit { amount }.data() } else { bust::instruction::Withdraw { amount }.data() };
         Instruction::new_with_bytes(bust::id(), &data, accounts)
+    }
+
+    /// Sweeps `tokens` (owned by `owner`'s deposit PDA) into the balance of the user account `credit`
+    pub fn sweep_deposit_to(&mut self, credit: &Pubkey, depositor: &Pubkey, tokens: Pubkey) -> Result<(), String> {
+        let c = self.caller();
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::SweepDeposit {}.data(),
+            bust::accounts::SweepDeposit {
+                config: config(),
+                vault: vault(),
+                vault_tokens: vault_tokens(),
+                user: user_pda(credit),
+                deposit_authority: deposit_pda(depositor),
+                deposit_tokens: tokens,
+                usdc_mint: self.mint,
+                token_program: spl_token::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[&c])
+    }
+
+    pub fn sweep_deposit(&mut self, owner: &Pubkey, tokens: Pubkey) -> Result<(), String> {
+        self.sweep_deposit_to(owner, owner, tokens)
     }
 
     pub fn seed(&mut self, amount: u64) {

@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 
-use crate::{constants::*, error::PerpError, state::*};
+use crate::{constants::*, error::PerpError, events::DepositSwept, state::*};
 
 // ---------- create_user
 
@@ -102,6 +102,58 @@ pub fn handle_withdraw(ctx: Context<MoveFunds>, amount: u64) -> Result<()> {
         amount,
         ctx.accounts.usdc_mint.decimals,
     )
+}
+
+// ---------- sweep_deposit (anyone; the USDC can only reach the deposit address's owner)
+
+#[derive(Accounts)]
+pub struct SweepDeposit<'info> {
+    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = usdc_mint)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
+    #[account(mut, seeds = [VAULT_TOKENS_SEED], bump = vault.tokens_bump)]
+    pub vault_tokens: Account<'info, TokenAccount>,
+    #[account(mut, seeds = [USER_SEED, user.owner.as_ref()], bump = user.bump)]
+    pub user: Account<'info, UserAccount>,
+    /// CHECK: The owner's deposit PDA; holds nothing itself, only signs for its token accounts
+    #[account(seeds = [DEPOSIT_SEED, user.owner.as_ref()], bump)]
+    pub deposit_authority: UncheckedAccount<'info>,
+    /// Usually the deposit PDA's associated token account; any USDC account it owns works
+    #[account(mut, token::mint = usdc_mint, token::authority = deposit_authority)]
+    pub deposit_tokens: Account<'info, TokenAccount>,
+    pub usdc_mint: Account<'info, Mint>,
+    pub token_program: Program<'info, Token>,
+}
+
+/// Moves everything at the deposit address into the vault and credits the owner, so USDC sent from an exchange or
+/// another wallet lands in the trading balance without the owner signing. A keeper sweeps; anyone may.
+pub fn handle_sweep_deposit(ctx: Context<SweepDeposit>) -> Result<()> {
+    let amount = ctx.accounts.deposit_tokens.amount;
+    require!(amount > 0, PerpError::ZeroAmount);
+    let owner = ctx.accounts.user.owner;
+    let bump = [ctx.bumps.deposit_authority];
+    let seeds: &[&[&[u8]]] = &[&[DEPOSIT_SEED, owner.as_ref(), &bump]];
+    transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.key(),
+            TransferChecked {
+                from: ctx.accounts.deposit_tokens.to_account_info(),
+                mint: ctx.accounts.usdc_mint.to_account_info(),
+                to: ctx.accounts.vault_tokens.to_account_info(),
+                authority: ctx.accounts.deposit_authority.to_account_info(),
+            },
+            seeds,
+        ),
+        amount,
+        ctx.accounts.usdc_mint.decimals,
+    )?;
+    let user = &mut ctx.accounts.user;
+    let vault = &mut ctx.accounts.vault;
+    user.balance = user.balance.checked_add(amount).ok_or(PerpError::MathOverflow)?;
+    vault.user_balances = vault.user_balances.checked_add(amount).ok_or(PerpError::MathOverflow)?;
+    emit!(DepositSwept { owner, amount });
+    Ok(())
 }
 
 // ---------- seed_vault (LaunchLab fees and donations)
