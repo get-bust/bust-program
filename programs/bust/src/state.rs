@@ -100,5 +100,15 @@ pub struct Vault {
 pub struct UserAccount {
     pub owner: Pubkey,
     pub balance: u64,
+    /// Pubkey::default() when there is no session
+    pub session_key: Pubkey,
+    pub session_expires_at: i64,
     pub bump: u8,
+}
+
+impl UserAccount {
+    pub fn can_trade(&self, signer: &Pubkey, now: i64) -> bool {
+        *signer == self.owner
+            || (self.session_key != Pubkey::default() && *signer == self.session_key && now < self.session_expires_at)
+    }
 }

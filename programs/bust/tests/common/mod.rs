@@ -252,6 +252,20 @@ impl Env {
         self.send(&[ix], &[&funder]).unwrap();
     }
 
+    pub fn session_ix(&self, owner: &Keypair, data: Vec<u8>) -> Instruction {
+        Instruction::new_with_bytes(
+            bust::id(),
+            &data,
+            bust::accounts::ManageSession { owner: owner.pubkey(), config: config(), user: user_pda(&owner.pubkey()) }
+                .to_account_metas(None),
+        )
+    }
+
+    pub fn set_session(&mut self, owner: &Keypair, session_key: Pubkey, expires_at: i64) -> Result<(), String> {
+        let ix = self.session_ix(owner, bust::instruction::SetSession { session_key, expires_at }.data());
+        self.send(&[ix], &[owner])
+    }
+
     pub fn admin_ix(&self, data: Vec<u8>) -> Instruction {
         Instruction::new_with_bytes(
             bust::id(),

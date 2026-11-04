@@ -41,4 +41,12 @@ pub mod bust {
     pub fn seed_vault(ctx: Context<SeedVault>, amount: u64) -> Result<()> {
         instructions::user::handle_seed_vault(ctx, amount)
     }
+
+    pub fn set_session(ctx: Context<ManageSession>, session_key: Pubkey, expires_at: i64) -> Result<()> {
+        instructions::user::handle_set_session(ctx, session_key, expires_at)
+    }
+
+    pub fn revoke_session(ctx: Context<ManageSession>) -> Result<()> {
+        instructions::user::handle_revoke_session(ctx)
+    }
 }

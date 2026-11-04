@@ -23,7 +23,13 @@ pub struct CreateUser<'info> {
 }
 
 pub fn handle_create_user(ctx: Context<CreateUser>) -> Result<()> {
-    ctx.accounts.user.set_inner(UserAccount { owner: ctx.accounts.owner.key(), balance: 0, bump: ctx.bumps.user });
+    ctx.accounts.user.set_inner(UserAccount {
+        owner: ctx.accounts.owner.key(),
+        balance: 0,
+        session_key: Pubkey::default(),
+        session_expires_at: 0,
+        bump: ctx.bumps.user,
+    });
     Ok(())
 }
 
@@ -68,6 +74,7 @@ pub fn handle_deposit(ctx: Context<MoveFunds>, amount: u64) -> Result<()> {
     Ok(())
 }
 
+/// Owner signature only; a session key cannot move funds out
 pub fn handle_withdraw(ctx: Context<MoveFunds>, amount: u64) -> Result<()> {
     require!(amount > 0, PerpError::ZeroAmount);
     let user = &mut ctx.accounts.user;
@@ -127,5 +134,34 @@ pub fn handle_seed_vault(ctx: Context<SeedVault>, amount: u64) -> Result<()> {
     )?;
     let vault = &mut ctx.accounts.vault;
     vault.cash = vault.cash.checked_add(amount).ok_or(PerpError::MathOverflow)?;
+    Ok(())
+}
+
+// ---------- session key
+
+#[derive(Accounts)]
+pub struct ManageSession<'info> {
+    pub owner: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds = [USER_SEED, owner.key().as_ref()], bump = user.bump, has_one = owner)]
+    pub user: Account<'info, UserAccount>,
+}
+
+/// A session key can only open and close positions; it lives at most config.max_session_sec
+pub fn handle_set_session(ctx: Context<ManageSession>, session_key: Pubkey, expires_at: i64) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+    require!(session_key != Pubkey::default(), PerpError::InvalidSession);
+    require!(expires_at > now && expires_at <= now + ctx.accounts.config.params.max_session_sec, PerpError::InvalidSession);
+    let user = &mut ctx.accounts.user;
+    user.session_key = session_key;
+    user.session_expires_at = expires_at;
+    Ok(())
+}
+
+pub fn handle_revoke_session(ctx: Context<ManageSession>) -> Result<()> {
+    let user = &mut ctx.accounts.user;
+    user.session_key = Pubkey::default();
+    user.session_expires_at = 0;
     Ok(())
 }
