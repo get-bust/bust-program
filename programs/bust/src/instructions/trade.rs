@@ -266,6 +266,7 @@ fn settle(
     user: &mut UserAccount,
     position: &Position,
     exit: u64,
+    liquidate: bool,
 ) -> Result<Settlement> {
     let oi = match position.side {
         Side::Long => &mut market.oi_long,
@@ -278,7 +279,7 @@ fn settle(
     let margin = position.margin;
     let mut s = Settlement { liquidated: false, raw_pnl: raw, paid: 0, fee: 0 };
 
-    if math::is_bust(position.side, exit, position.bust_price) {
+    if liquidate || math::is_bust(position.side, exit, position.bust_price) {
         // Hard bust: the whole margin goes to the vault
         s.liquidated = true;
         s.fee = math::fee_of(margin, params.loss_fee_ppm);
@@ -370,6 +371,7 @@ pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
         &mut ctx.accounts.user,
         &ctx.accounts.position,
         read.price,
+        false,
     )?;
     emit_closed(&ctx.accounts.position, read.price, &s);
     Ok(())
@@ -408,5 +410,43 @@ pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
         user.balance = user.balance.checked_add(order.margin).ok_or(PerpError::MathOverflow)?;
     }
     emit!(OrderCancelled { owner: order.owner, order: order.key() });
+    Ok(())
+}
+
+// ---------- liquidate (anyone, at the latest price)
+
+#[derive(Accounts)]
+pub struct Liquidate<'info> {
+    #[account(mut)]
+    pub keeper: Signer<'info>,
+    /// CHECK: Paid the position's rent and gets it back (address stored on the position)
+    #[account(mut, address = position.rent_payer)]
+    pub rent_payer: UncheckedAccount<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
+    #[account(mut, address = position.market)]
+    pub market: Account<'info, Market>,
+    #[account(mut, seeds = [USER_SEED, position.owner.as_ref()], bump = user.bump)]
+    pub user: Account<'info, UserAccount>,
+    #[account(
+        mut,
+        close = rent_payer,
+        seeds = [POSITION_SEED, position.owner.as_ref(), &position.id.to_le_bytes()],
+        bump = position.bump,
+    )]
+    pub position: Account<'info, Position>,
+    pub price_update: Account<'info, PriceUpdateV2>,
+}
+
+pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
+    let params = ctx.accounts.config.params;
+    let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params)?;
+    let position = &ctx.accounts.position;
+    require!(math::is_bust(position.side, read.price, position.bust_price), PerpError::NotLiquidatable);
+    let s =
+        settle(&params, &mut ctx.accounts.vault, &mut ctx.accounts.market, &mut ctx.accounts.user, position, read.price, true)?;
+    emit_closed(&ctx.accounts.position, read.price, &s);
     Ok(())
 }

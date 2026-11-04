@@ -83,4 +83,8 @@ pub mod bust {
     pub fn cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
         instructions::trade::handle_cancel_order(ctx)
     }
+
+    pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
+        instructions::trade::handle_liquidate(ctx)
+    }
 }

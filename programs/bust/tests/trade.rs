@@ -232,3 +232,42 @@ fn close_order_must_match_its_position() {
     expect_err(env.send(&[ix], &[&keeper]), "OrderMismatch");
     env.execute_close(&order).unwrap();
 }
+
+#[test]
+fn liquidation_only_past_bust_price() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+
+    // 100× long @100 → bust at 99.05
+    let pos = env.open(&owner, &t.kp, Side::Long, usdc(10.0), 100).unwrap();
+    env.set_price(99.1);
+    expect_err(env.liquidate(&pos), "NotLiquidatable");
+    env.set_price(99.0);
+    env.liquidate(&pos).unwrap();
+    assert_eq!(env.user_state(&owner).balance, usdc(990.0));
+    let v = env.vault_state();
+    assert_eq!(v.cash, usdc(25_000.0) + usdc(10.0) - usdc(0.2));
+    assert_eq!(v.open_margin, 0);
+    assert!(env.svm.get_account(&pos).is_none_or(|a| a.lamports == 0), "position closed");
+    env.assert_invariant();
+}
+
+#[test]
+fn short_is_liquidated_on_the_way_up() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+
+    // 100× short @100 → bust at 100.95
+    let pos = env.open(&owner, &t.kp, Side::Short, usdc(10.0), 100).unwrap();
+    env.set_price(99.0);
+    expect_err(env.liquidate(&pos), "NotLiquidatable");
+    env.set_price(101.0);
+    env.liquidate(&pos).unwrap();
+    let m: bust::Market = env.account(&env.market);
+    assert_eq!(m.oi_short, 0);
+    env.assert_invariant();
+}

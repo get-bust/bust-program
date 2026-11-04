@@ -470,6 +470,27 @@ impl Env {
         self.send(&[ix], &[&caller])
     }
 
+    pub fn liquidate(&mut self, position: &Pubkey) -> Result<(), String> {
+        let p: bust::Position = self.account(position);
+        let keeper = self.caller();
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::Liquidate {}.data(),
+            bust::accounts::Liquidate {
+                keeper: keeper.pubkey(),
+                rent_payer: p.rent_payer,
+                config: config(),
+                vault: vault(),
+                market: p.market,
+                user: user_pda(&p.owner),
+                position: *position,
+                price_update: self.price,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[&keeper])
+    }
+
     pub fn admin_ix(&self, data: Vec<u8>) -> Instruction {
         Instruction::new_with_bytes(
             bust::id(),

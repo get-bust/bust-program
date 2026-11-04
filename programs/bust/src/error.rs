@@ -16,6 +16,8 @@ pub enum PerpError {
     InvalidPrice,
     #[msg("Price confidence interval too wide")]
     PriceConfidence,
+    #[msg("Position is not liquidatable at this price")]
+    NotLiquidatable,
     #[msg("Session expiry out of range")]
     InvalidSession,
     #[msg("Invalid config parameter")]
