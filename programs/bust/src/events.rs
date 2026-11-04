@@ -95,6 +95,8 @@ pub struct RewardsClaimed {
 pub struct EpochFundedEvent {
     pub epoch: u64,
     pub bust: u64,
+    /// xBUST rights opened (at the current rate)
+    pub xbust: u64,
     pub total_loss: u64,
 }
 

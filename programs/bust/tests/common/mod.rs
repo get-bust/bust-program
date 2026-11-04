@@ -521,6 +521,7 @@ impl Env {
                 epoch_record: epoch_pda(epoch),
                 authority_bust: src,
                 bust_mint: mint,
+                xbust_mint: xbust_mint(),
                 token_program: spl_token::ID,
             }
             .to_account_metas(None),

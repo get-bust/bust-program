@@ -187,6 +187,41 @@ fn adding_to_a_lock_keeps_what_already_unlocked() {
     expect_err(env.convert(&attacker, theirs), "AccountNotInitialized");
 }
 
+// ---------- a new loser cannot take the surplus that instant sellers left to those who wait
+
+#[test]
+fn new_xbust_enters_at_the_current_rate() {
+    let mut env = Env::new();
+    let pool = bust_units(200);
+    let (a, xa) = xbust_holder(&mut env, pool);
+    // Half burned as if sold into the wall: 100 xBUST against 200 $BUST (rate 2)
+    let akp = a.kp.insecure_clone();
+    let burn = spl_token::instruction::burn(&spl_token::ID, &xa, &xbust_mint(), &akp.pubkey(), &[], pool / 2).unwrap();
+    env.send(&[burn], &[&akp]).unwrap();
+
+    // The next epoch's loser gets 50 xBUST from a 100 $BUST pool at rate 2
+    let c = trade_and_close(&mut env, 100.0, 95.0);
+    let epoch = env.dist_state().epoch;
+    env.next_epoch();
+    env.distribute().unwrap();
+    env.fund_epoch(epoch, bust_units(100)).unwrap();
+    let kc = c.kp.pubkey();
+    let xc = env.xbust_account(&kc);
+    env.claim_xbust(&kc, epoch, xc).unwrap();
+    assert_eq!(env.token_balance(&xc), bust_units(50));
+
+    // Both convert: the one who waited keeps the surplus, the new loser gets their own pool
+    let mint = env.bust_mint;
+    let (out_a, out_c) = (env.token_account_of(&mint, &a.kp.pubkey(), 0), env.token_account_of(&mint, &kc, 0));
+    env.lock_xbust(&a.kp, xa, pool / 2).unwrap();
+    env.lock_xbust(&c.kp, xc, bust_units(50)).unwrap();
+    env.set_time(env.now + VEST_SEC);
+    env.convert(&a.kp, out_a).unwrap();
+    env.convert(&c.kp, out_c).unwrap();
+    assert_eq!(env.token_balance(&out_a), pool);
+    assert_eq!(env.token_balance(&out_c), bust_units(100));
+}
+
 // ---------- the rate cannot be diluted by unclaimed rights
 
 #[test]

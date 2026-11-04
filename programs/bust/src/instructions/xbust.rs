@@ -112,7 +112,7 @@ pub fn handle_migrate_treasury(ctx: Context<MigrateTreasury>) -> Result<()> {
 #[instruction(epoch: u64)]
 pub struct FundEpoch<'info> {
     pub authority: Signer<'info>,
-    #[account(mut, seeds = [TREASURY_SEED], bump = treasury.bump, has_one = bust_mint)]
+    #[account(mut, seeds = [TREASURY_SEED], bump = treasury.bump, has_one = bust_mint, has_one = xbust_mint)]
     pub treasury: Account<'info, Treasury>,
     #[account(mut, seeds = [TREASURY_TOKENS_SEED], bump = treasury.tokens_bump)]
     pub treasury_tokens: Account<'info, TokenAccount>,
@@ -121,17 +121,34 @@ pub struct FundEpoch<'info> {
     #[account(mut, token::mint = bust_mint, token::authority = authority)]
     pub authority_bust: Account<'info, TokenAccount>,
     pub bust_mint: Account<'info, Mint>,
+    /// Its supply, for the current rate
+    pub xbust_mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
 }
 
-/// The $BUST bought with the epoch's xBUST share enters the treasury; the same amount of xBUST can be minted for that epoch.
-/// If anyone could fund an epoch, they could fund it with one base unit and lock the losers out of their share.
+/// The $BUST bought with the epoch's xBUST share enters the treasury, and xBUST rights open for that epoch at the current
+/// rate (1 in the first epoch). At 1:1, new losers would share with those who wait the surplus that xBUST burned at the
+/// wall left behind. If anyone could fund an epoch, they could fund it with one base unit and lock the losers out of their share.
 pub fn handle_fund_epoch(ctx: Context<FundEpoch>, _epoch: u64, amount: u64) -> Result<()> {
     require_keys_eq!(ctx.accounts.authority.key(), ctx.accounts.treasury.buyback_authority, PerpError::NotBuybackAuthority);
     require!(amount > 0, PerpError::ZeroAmount);
     let record = &mut ctx.accounts.epoch_record;
     require!(!record.funded, PerpError::EpochFunded);
     require!(record.total_loss > 0, PerpError::NothingToWithdraw);
+
+    // xBUST = $BUST × (supply + locked + unclaimed) / treasury; 1:1 with no claims. Rounded down: the rate never falls
+    let treasury = &ctx.accounts.treasury;
+    let claims = (ctx.accounts.xbust_mint.supply as u128)
+        .checked_add(treasury.total_locked as u128)
+        .and_then(|c| c.checked_add(treasury.unclaimed as u128))
+        .ok_or(PerpError::MathOverflow)?;
+    let backing = ctx.accounts.treasury_tokens.amount as u128;
+    let xbust = if claims == 0 || backing == 0 {
+        amount
+    } else {
+        u64::try_from(amount as u128 * claims / backing).map_err(|_| PerpError::MathOverflow)?
+    };
+    require!(xbust > 0, PerpError::ZeroAmount);
 
     transfer_checked(
         CpiContext::new(
@@ -146,11 +163,11 @@ pub fn handle_fund_epoch(ctx: Context<FundEpoch>, _epoch: u64, amount: u64) -> R
         amount,
         ctx.accounts.bust_mint.decimals,
     )?;
-    record.pool = amount;
+    record.pool = xbust;
     record.funded = true;
     let treasury = &mut ctx.accounts.treasury;
-    treasury.unclaimed = treasury.unclaimed.checked_add(amount).ok_or(PerpError::MathOverflow)?;
-    emit!(EpochFundedEvent { epoch: record.epoch, bust: amount, total_loss: record.total_loss });
+    treasury.unclaimed = treasury.unclaimed.checked_add(xbust).ok_or(PerpError::MathOverflow)?;
+    emit!(EpochFundedEvent { epoch: record.epoch, bust: amount, xbust, total_loss: record.total_loss });
     Ok(())
 }
 

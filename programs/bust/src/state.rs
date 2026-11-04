@@ -288,7 +288,7 @@ impl Treasury {
     pub const V1_LEN: usize = 8 + 32 * 3 + 8 + 8 + 3;
 }
 
-/// A closed epoch: total net loss and the $BUST put in the treasury for it (= the xBUST to be minted)
+/// A closed epoch: total net loss and the xBUST rights opened for it (the $BUST put in the treasury × the current rate)
 #[account]
 #[derive(InitSpace)]
 pub struct EpochRecord {
