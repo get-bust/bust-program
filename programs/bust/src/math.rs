@@ -6,6 +6,10 @@ use crate::state::{DistParams, Params, Side};
 
 const PPM_TO_SCALE: u128 = SCALE / PPM;
 
+/// A win is priced on a move of at most 1000× the entry price. Past that the products in win_breakdown could
+/// overflow u128, and a close that panics would leave a winning position impossible to close
+pub const MAX_PRICED_MOVE: u128 = 1_000 * SCALE;
+
 pub fn bust_price(side: Side, entry: u64, leverage: u16, liq_buffer_ppm: u32) -> u64 {
     let entry = entry as u128;
     let inv_lev = SCALE / leverage as u128;
@@ -27,7 +31,7 @@ pub fn is_bust(side: Side, price: u64, bust: u64) -> bool {
 /// PnL before haircuts (profit +, loss −)
 pub fn raw_pnl(side: Side, entry: u64, exit: u64, notional: u64) -> i128 {
     let diff = exit as i128 - entry as i128;
-    let pnl = notional as i128 * diff / entry as i128;
+    let pnl = (notional as i128).saturating_mul(diff) / entry as i128;
     match side {
         Side::Long => pnl,
         Side::Short => -pnl,
@@ -67,7 +71,7 @@ pub fn win_breakdown(entry: u64, exit: u64, notional: u64, position_multiplier_m
     if price_move <= cut {
         return zero;
     }
-    let mv = price_move - cut;
+    let mv = (price_move - cut).min(MAX_PRICED_MOVE);
 
     // scale = (1 − base)·move / (move + 1/rate + ref·1000/(1e6·mult_milli)), multiplied through by move
     let c1 = SCALE / p.impact_rate_multiplier as u128;
@@ -76,7 +80,7 @@ pub fn win_breakdown(entry: u64, exit: u64, notional: u64, position_multiplier_m
 
     let mut gain = notional as u128 * mv / SCALE;
     gain = gain * keep / SCALE;
-    gain = gain * mv / (mv + c1 + c2);
+    gain = (gain * mv / (mv + c1 + c2)).min(u64::MAX as u128);
     let fee = gain * p.win_fee_ppm as u128 / PPM;
     WinBreakdown { gain: gain as u64, fee: fee as u64, net: (gain - fee) as u64 }
 }
