@@ -53,16 +53,15 @@ pub fn read_price(update: &PriceUpdateV2, feed_id: &[u8; 32], params: &Params, m
 }
 
 /// An order fills at exactly one price: the first update on the feed published at or after its fill time
-/// T = requested_at + fill_delay_sec, i.e. publish_time ≥ T and prev_publish_time < T. Pyth signs prev_publish_time
+/// T = order.fill_at, i.e. publish_time ≥ T and prev_publish_time < T. Pyth signs prev_publish_time
 /// with each update, so the message is unique and cannot be forged. A user running their own keeper therefore cannot
 /// pick the best of several updates, and cannot skip a bad one either: any keeper can fetch the same message from
-/// Hermes later and fill with it. The delay keeps T past what the user could have seen when the request landed,
-/// even if the chain clock runs a little behind.
+/// Hermes later and fill with it. T is set at request from the later of the chain clock and the newest price the
+/// market has seen, plus a delay, so it lies past anything the user could have seen even if the chain clock lags.
 ///
 /// The price's uncertainty must also be small next to what the margin covers: confidence / price × leverage at most
 /// max_conf_margin_ppm. At 1000× the margin covers a 10 bps move, and the general 0.2% bound would allow twice that.
-fn check_fill_price(read: &PriceRead, requested_at: i64, leverage: u16, params: &Params) -> Result<()> {
-    let fill_at = requested_at + params.fill_delay_sec;
+fn check_fill_price(read: &PriceRead, fill_at: i64, leverage: u16, params: &Params) -> Result<()> {
     require!(read.publish_time >= fill_at, PerpError::PriceBeforeRequest);
     require!(read.prev_publish_time < fill_at, PerpError::NotTheFillPrice);
     require!(
@@ -70,6 +69,16 @@ fn check_fill_price(read: &PriceRead, requested_at: i64, leverage: u16, params: 
         PerpError::PriceConfidence
     );
     Ok(())
+}
+
+/// Moves the market's newest seen publish time forward (never back)
+fn observe(market: &mut Market, publish_time: i64) {
+    market.last_publish_time = market.last_publish_time.max(publish_time);
+}
+
+/// An order requested now fills at the first price published at or after this
+fn fill_time(now: i64, market: &Market, params: &Params) -> i64 {
+    now.max(market.last_publish_time) + params.fill_delay_sec
 }
 
 fn order_space() -> usize {
@@ -128,6 +137,7 @@ pub fn handle_request_open(ctx: Context<RequestOpen>, side: Side, margin: u64, l
         margin,
         leverage,
         requested_at: now,
+        fill_at: fill_time(now, &ctx.accounts.market, params),
         rent_payer: ctx.accounts.payer.key(),
         bump: ctx.bumps.order,
     });
@@ -142,6 +152,10 @@ pub struct RequestClose<'info> {
     pub authority: Signer<'info>,
     #[account(mut)]
     pub payer: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    #[account(address = position.market)]
+    pub market: Account<'info, Market>,
     #[account(mut, seeds = [USER_SEED, position.owner.as_ref()], bump = user.bump)]
     pub user: Account<'info, UserAccount>,
     #[account(seeds = [POSITION_SEED, position.owner.as_ref(), &position.id.to_le_bytes()], bump = position.bump)]
@@ -174,6 +188,7 @@ pub fn handle_request_close(ctx: Context<RequestClose>) -> Result<()> {
         margin: 0,
         leverage: position.leverage,
         requested_at: now,
+        fill_at: fill_time(now, &ctx.accounts.market, &ctx.accounts.config.params),
         rent_payer: ctx.accounts.payer.key(),
         bump: ctx.bumps.order,
     });
@@ -226,7 +241,7 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     require!(!config.paused, PerpError::Paused);
 
     let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, params, FILL_PRICE_ANY_AGE)?;
-    check_fill_price(&read, order.requested_at, order.leverage, params)?;
+    check_fill_price(&read, order.fill_at, order.leverage, params)?;
     let (side, margin, leverage) = (order.side, order.margin, order.leverage);
     let notional = margin.checked_mul(leverage as u64).ok_or(PerpError::MathOverflow)?;
 
@@ -236,6 +251,7 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     let cap = math::oi_cap(net, params.oi_cap_ratio_ppm, params.oi_floor);
     let total_cap = math::oi_cap(net, params.oi_total_cap_ratio_ppm, params.oi_total_floor);
     let market = &mut ctx.accounts.market;
+    observe(market, read.publish_time);
     let oi = match side {
         Side::Long => &mut market.oi_long,
         Side::Short => &mut market.oi_short,
@@ -278,6 +294,7 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
         entry_price: read.price,
         bust_price,
         opened_at: now,
+        fill_publish_time: read.publish_time,
         rent_payer: ctx.accounts.keeper.key(),
         bump: ctx.bumps.position,
     });
@@ -521,7 +538,8 @@ pub struct ExecuteClose<'info> {
 pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
     let params = ctx.accounts.config.params;
     let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
-    check_fill_price(&read, ctx.accounts.order.requested_at, ctx.accounts.position.leverage, &params)?;
+    check_fill_price(&read, ctx.accounts.order.fill_at, ctx.accounts.position.leverage, &params)?;
+    observe(&mut ctx.accounts.market, read.publish_time);
     let s = settle(
         &params,
         &mut ctx.accounts.vault,
@@ -634,7 +652,15 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let params = ctx.accounts.config.params;
     let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, params.max_price_age_sec)?;
     let position = &ctx.accounts.position;
-    require!(math::is_bust(position.side, read.price, position.bust_price), PerpError::NotLiquidatable);
+    // Never a price from before the position existed, nor one older than the market has already used: a liquidator
+    // could otherwise reach back for a wick that the fill came after
+    require!(
+        read.publish_time >= position.fill_publish_time && read.publish_time >= ctx.accounts.market.last_publish_time,
+        PerpError::PriceTooOld
+    );
+    // Bust even at the trader's end of the confidence interval: an uncertain price does not take the margin
+    require!(math::is_clearly_bust(position.side, read.price, read.conf, position.bust_price), PerpError::NotLiquidatable);
+    observe(&mut ctx.accounts.market, read.publish_time);
     let s =
         settle(&params, &mut ctx.accounts.vault, &mut ctx.accounts.market, &mut ctx.accounts.user, position, read.price, true)?;
     record_result(
@@ -647,5 +673,25 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         &s,
     )?;
     emit_closed(&ctx.accounts.position, read.price, &s);
+    Ok(())
+}
+
+// ---------- observe_price (anyone; keeps the market's clock on the Pyth timeline)
+
+#[derive(Accounts)]
+pub struct ObservePrice<'info> {
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds = [MARKET_SEED, &market.index.to_le_bytes()], bump = market.bump)]
+    pub market: Account<'info, Market>,
+    pub price_update: Account<'info, PriceUpdateV2>,
+}
+
+/// Records a fresh verified price's publish time on the market. Keepers call it every few seconds, so that new orders
+/// fill after the latest price anyone could have seen even when the chain clock lags, and liquidations cannot go back
+pub fn handle_observe_price(ctx: Context<ObservePrice>) -> Result<()> {
+    let params = ctx.accounts.config.params;
+    let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, params.max_price_age_sec)?;
+    observe(&mut ctx.accounts.market, read.publish_time);
     Ok(())
 }

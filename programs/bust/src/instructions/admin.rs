@@ -115,6 +115,7 @@ pub fn handle_add_market(
         oi_short: 0,
         long_units: 0,
         short_units: 0,
+        last_publish_time: 0,
         bump: ctx.bumps.market,
     });
     Ok(())

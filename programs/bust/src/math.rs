@@ -21,6 +21,14 @@ pub fn bust_price(side: Side, entry: u64, leverage: u16, liq_buffer_ppm: u32) ->
     (entry * factor / SCALE) as u64
 }
 
+/// Bust even at the edge of the price's confidence interval that is best for the trader
+pub fn is_clearly_bust(side: Side, price: u64, conf: u64, bust: u64) -> bool {
+    match side {
+        Side::Long => price.saturating_add(conf) <= bust,
+        Side::Short => price.saturating_sub(conf) >= bust,
+    }
+}
+
 pub fn is_bust(side: Side, price: u64, bust: u64) -> bool {
     match side {
         Side::Long => price <= bust,

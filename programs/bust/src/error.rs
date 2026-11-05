@@ -60,4 +60,6 @@ pub enum PerpError {
     FundingWindowOpen,
     #[msg("Every market must be passed, in index order")]
     MarketsMismatch,
+    #[msg("Price is older than one this market or position has already used")]
+    PriceTooOld,
 }

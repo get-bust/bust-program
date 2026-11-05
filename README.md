@@ -84,7 +84,7 @@ Every account is a PDA of the program.
 | Account owner | `create_user`, `deposit`, `withdraw`, `set_session`, `revoke_session`, `stake`, `request_unstake`, `withdraw_unstaked`, `claim_rewards`, `lock_xbust`, `convert_vested` |
 | Owner or session key | `request_open`, `request_close` |
 | Buyback authority | `fund_epoch` |
-| Anyone (keepers) | `sweep_deposit`, `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `claim_ticket`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `close_unfunded_loss`, `claim_launch_fees`, `sweep_launch_fees`, `seed_vault` |
+| Anyone (keepers) | `sweep_deposit`, `observe_price`, `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `claim_ticket`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `close_unfunded_loss`, `claim_launch_fees`, `sweep_launch_fees`, `seed_vault` |
 
 The permissionless instructions cannot move money anywhere the program has not fixed in advance:
 `withdraw_bucket` pays only the registered wallets, `claim_xbust` mints only to the loser's account, and the
@@ -123,7 +123,7 @@ sequenceDiagram
     participant H as Pyth (Hermes)
     U->>P: request_open(side, margin, leverage)
     Note over P: margin: balance → reserved<br/>OrderRequest stores requested_at
-    K->>H: the first update at T = requested_at + 2 s
+    K->>H: the first update at T (fixed at request)
     K->>P: execute_open(order, price update)
     Note over P: publish_time ≥ T and prev_publish_time < T<br/>OI cap, bust price, open Position
     U->>P: request_close(position)
@@ -131,21 +131,23 @@ sequenceDiagram
     Note over P: same rule, settle, close Position,<br/>update the user's EpochLoss
 ```
 
-- **One fill price.** An order fills at the first Pyth update on its feed published at or after
-  `T = requested_at + fill_delay_sec` (2 s): `publish_time ≥ T` and `prev_publish_time < T`. Pyth signs
+- **One fill price.** An order fills at the first Pyth update on its feed published at or after its fill time
+  `T`: `publish_time ≥ T` and `prev_publish_time < T`. Pyth signs
   `prev_publish_time` into every update, so exactly one message qualifies and nobody can forge another.
 - **No choosing, no skipping.** Anyone can fill, including a user running their own keeper, but there is
   nothing to choose between. Not filling does not help either: the price is fixed once `T` passes, Hermes
   serves that same message for any past second, and any keeper can fill with it later.
-- **The delay** puts `T` past what the user could have seen when the request landed, with room for the chain
-  clock running a little behind real time. Keepers should watch for clock drift larger than that.
+- **The fill time** is set at request as `T = max(chain clock, market.last_publish_time) + fill_delay_sec`
+  (2 s). Each market keeps the newest Pyth publish time it has seen, from fills, liquidations and the
+  permissionless `observe_price`, which keepers call every few seconds, and that value never moves back. So `T`
+  follows the Pyth timeline: even if the chain clock lags real time, the fill price is one nobody had seen when
+  the request landed.
 - **Cancelling** is only for a Pyth outage: an order nobody filled can be cancelled after `order_timeout_sec`
   (60 s) and its margin comes back.
 - Fill prices need at least 3 verified Wormhole signatures under partial verification and a confidence interval
   within 0.2% of the price, and within a quarter of what the margin covers: `conf / price × leverage ≤ 25%`.
   At 1000× the margin covers a 10 bps move, so the fill price may carry at most 2.5 bps of uncertainty.
-- Liquidations use the latest price instead, at most 5 s old, with the 0.2% bound only, so they are not held up
-  in a volatile market.
+- Liquidations are covered below.
 
 ### Session keys
 
@@ -163,8 +165,17 @@ long:  entry × (1 − 1/leverage + buffer)
 short: entry × (1 + 1/leverage − buffer)
 ```
 
-Anyone can liquidate a position at the latest valid price once the price is at or past its bust price. The
-whole margin goes to the vault, less the loss fee.
+Anyone can liquidate a position whose price is past its bust price. The whole margin goes to the vault, less the
+loss fee, so whoever liquidates on the vault's side has a reason to pick the harshest price they can. The price
+is constrained so there is nothing to pick:
+
+- at most 5 s old, and **no older than the position's own fill price**, so a wick from before the position
+  existed cannot liquidate it;
+- **no older than the newest price the market has seen**, so a liquidator cannot reach back past a price that
+  was not bust;
+- **bust at the trader's end of its confidence interval**: `price + conf ≤ bust` for a long, `price − conf ≥
+  bust` for a short. An uncertain price does not take the margin; the vault loses nothing by waiting, since a
+  trader's loss is capped at the margin either way.
 
 ### Open interest cap
 

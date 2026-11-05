@@ -192,6 +192,10 @@ pub mod bust {
         instructions::trade::handle_liquidate(ctx)
     }
 
+    pub fn observe_price(ctx: Context<ObservePrice>) -> Result<()> {
+        instructions::trade::handle_observe_price(ctx)
+    }
+
     pub fn harvest(ctx: Context<Harvest>) -> Result<()> {
         instructions::queue::handle_harvest(ctx)
     }

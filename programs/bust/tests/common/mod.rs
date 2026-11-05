@@ -866,6 +866,8 @@ impl Env {
             bust::accounts::RequestClose {
                 authority: signer.pubkey(),
                 payer: signer.pubkey(),
+                config: config(),
+                market: p.market,
                 user: user_pda(&p.owner),
                 position: *position,
                 order,
@@ -953,6 +955,16 @@ impl Env {
             .to_account_metas(None),
         );
         self.send(&[ix], &[&keeper])
+    }
+
+    pub fn observe_price(&mut self, market: Pubkey, price_update: Pubkey) -> Result<(), String> {
+        let c = self.caller();
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::ObservePrice {}.data(),
+            bust::accounts::ObservePrice { config: config(), market, price_update }.to_account_metas(None),
+        );
+        self.send(&[ix], &[&c])
     }
 
     pub fn harvest(&mut self) -> Result<(), String> {

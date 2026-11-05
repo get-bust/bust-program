@@ -39,8 +39,8 @@ pub struct Params {
     pub max_session_sec: i64,
     /// Minimum verified Wormhole signatures on a Pyth update (partial verification; Full always passes)
     pub min_price_signatures: u8,
-    /// An order fills at the first Pyth update published at or after requested_at + fill_delay_sec: one message,
-    /// fixed when the order is requested, that neither the user nor the keeper can choose
+    /// An order fills at the first Pyth update published at or after its fill time, max(now, the market's last
+    /// publish time) + fill_delay_sec: one message, fixed when the order is requested, that nobody can choose
     pub fill_delay_sec: i64,
     /// An order nobody filled can be cancelled and its margin refunded after this long (only matters if Pyth is down:
     /// the fill price can be fetched from Hermes at any later time)
@@ -450,6 +450,10 @@ pub struct Market {
     /// any price in one step: price × units / SCALE − OI for longs (math::side_pnl)
     pub long_units: u128,
     pub short_units: u128,
+    /// The newest Pyth publish time this market has seen, from fills, liquidations and observe_price. It never moves
+    /// back: liquidations cannot use anything older, and new orders fill no earlier than it, so a chain clock that
+    /// lags real time cannot give a user a fill price they have already seen
+    pub last_publish_time: i64,
     pub bump: u8,
 }
 
@@ -505,8 +509,8 @@ pub enum OrderKind {
     Close,
 }
 
-/// Two-step order: the user writes the request with a timestamp; anyone fills it at the one Pyth update that first
-/// reaches requested_at + fill_delay_sec. Nobody gets to pick the price, or to skip it.
+/// Two-step order: the user writes the request; anyone fills it at the one Pyth update that first reaches fill_at.
+/// Nobody gets to pick the price, or to skip it.
 #[account]
 #[derive(InitSpace)]
 pub struct OrderRequest {
@@ -520,6 +524,8 @@ pub struct OrderRequest {
     pub margin: u64,
     pub leverage: u16,
     pub requested_at: i64,
+    /// max(requested_at, market.last_publish_time) + fill_delay_sec, fixed at request
+    pub fill_at: i64,
     pub rent_payer: Pubkey,
     pub bump: u8,
 }
@@ -538,6 +544,8 @@ pub struct Position {
     pub entry_price: u64,
     pub bust_price: u64,
     pub opened_at: i64,
+    /// Publish time of the price the position was filled at; no older price can liquidate it
+    pub fill_publish_time: i64,
     /// Whoever paid the rent (relayer, keeper or user) gets it back on close
     pub rent_payer: Pubkey,
     pub bump: u8,
