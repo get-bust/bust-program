@@ -33,6 +33,9 @@ pub struct Params {
     pub max_price_age_sec: u64,
     /// Upper bound on Pyth confidence / price
     pub max_conf_ppm: u32,
+    /// On a fill, confidence / price × leverage may take at most this share of the margin: at 1000× the margin covers
+    /// a 10 bps move, so 25% allows 2.5 bps of uncertainty
+    pub max_conf_margin_ppm: u32,
     pub max_session_sec: i64,
     /// Minimum verified Wormhole signatures on a Pyth update (partial verification; Full always passes)
     pub min_price_signatures: u8,
@@ -63,6 +66,7 @@ impl Params {
         oi_total_floor: 50_000_000_000,
         max_price_age_sec: 5,
         max_conf_ppm: 2_000,
+        max_conf_margin_ppm: 250_000,
         max_session_sec: 30 * 24 * 60 * 60,
         // Hermes VAAs carry 3 signatures as of 2026-10 (guardian set 1); all of them are verified
         min_price_signatures: 3,
@@ -84,6 +88,7 @@ impl Params {
             && self.oi_cap_ratio_ppm <= 1_000_000
             && self.oi_total_cap_ratio_ppm <= 1_000_000
             && self.max_price_age_sec > 0
+            && self.max_conf_margin_ppm <= 1_000_000
             && self.max_session_sec > 0
             && self.min_price_signatures > 0
             && self.fill_delay_sec > 0

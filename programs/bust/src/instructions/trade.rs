@@ -18,6 +18,8 @@ pub struct PriceRead {
     pub publish_time: i64,
     /// Publish time of the update before this one on the same feed (signed with it)
     pub prev_publish_time: i64,
+    /// Confidence interval, 1e-8 scale
+    pub conf: u64,
 }
 
 /// A fill price is fixed by the order, not by when it is read: any age is fine
@@ -46,6 +48,7 @@ pub fn read_price(update: &PriceUpdateV2, feed_id: &[u8; 32], params: &Params, m
         price: value as u64,
         publish_time: price.publish_time,
         prev_publish_time: update.price_message.prev_publish_time,
+        conf: conf as u64,
     })
 }
 
@@ -55,10 +58,17 @@ pub fn read_price(update: &PriceUpdateV2, feed_id: &[u8; 32], params: &Params, m
 /// pick the best of several updates, and cannot skip a bad one either: any keeper can fetch the same message from
 /// Hermes later and fill with it. The delay keeps T past what the user could have seen when the request landed,
 /// even if the chain clock runs a little behind.
-fn check_fill_price(read: &PriceRead, requested_at: i64, params: &Params) -> Result<()> {
+///
+/// The price's uncertainty must also be small next to what the margin covers: confidence / price × leverage at most
+/// max_conf_margin_ppm. At 1000× the margin covers a 10 bps move, and the general 0.2% bound would allow twice that.
+fn check_fill_price(read: &PriceRead, requested_at: i64, leverage: u16, params: &Params) -> Result<()> {
     let fill_at = requested_at + params.fill_delay_sec;
     require!(read.publish_time >= fill_at, PerpError::PriceBeforeRequest);
     require!(read.prev_publish_time < fill_at, PerpError::NotTheFillPrice);
+    require!(
+        read.conf as u128 * PPM * leverage as u128 <= read.price as u128 * params.max_conf_margin_ppm as u128,
+        PerpError::PriceConfidence
+    );
     Ok(())
 }
 
@@ -216,7 +226,7 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     require!(!config.paused, PerpError::Paused);
 
     let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, params, FILL_PRICE_ANY_AGE)?;
-    check_fill_price(&read, order.requested_at, params)?;
+    check_fill_price(&read, order.requested_at, order.leverage, params)?;
     let (side, margin, leverage) = (order.side, order.margin, order.leverage);
     let notional = margin.checked_mul(leverage as u64).ok_or(PerpError::MathOverflow)?;
 
@@ -501,7 +511,7 @@ pub struct ExecuteClose<'info> {
 pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
     let params = ctx.accounts.config.params;
     let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
-    check_fill_price(&read, ctx.accounts.order.requested_at, &params)?;
+    check_fill_price(&read, ctx.accounts.order.requested_at, ctx.accounts.position.leverage, &params)?;
     let s = settle(
         &params,
         &mut ctx.accounts.vault,

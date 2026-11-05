@@ -307,3 +307,21 @@ fn an_empty_vault_takes_no_positions() {
     let owner = t.kp.pubkey();
     expect_err(env.open(&owner, &t.kp, Side::Long, usdc(10.0), 1).map(|_| ()), "OpenInterestCap");
 }
+
+#[test]
+fn high_leverage_needs_a_tight_confidence_interval() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    // 3 bps of confidence: inside the general 0.2%, but more than a quarter of what a 1000× margin covers (10 bps)
+    let wide = 0.03;
+    let at_1000 = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 1000).unwrap();
+    let at_100 = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 100).unwrap();
+    env.set_time(env.now + FILL_DELAY);
+    let now = env.now;
+    env.set_price_full(100.0, wide, now);
+    expect_err(env.execute_open(&at_1000).map(|_| ()), "PriceConfidence");
+    env.execute_open(&at_100).unwrap();
+    env.assert_invariant();
+}

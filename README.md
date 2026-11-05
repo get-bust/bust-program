@@ -142,7 +142,10 @@ sequenceDiagram
 - **Cancelling** is only for a Pyth outage: an order nobody filled can be cancelled after `order_timeout_sec`
   (60 s) and its margin comes back.
 - Fill prices need at least 3 verified Wormhole signatures under partial verification and a confidence interval
-  within 0.2% of the price. Liquidations use the latest price instead, at most 5 s old.
+  within 0.2% of the price, and within a quarter of what the margin covers: `conf / price × leverage ≤ 25%`.
+  At 1000× the margin covers a 10 bps move, so the fill price may carry at most 2.5 bps of uncertainty.
+- Liquidations use the latest price instead, at most 5 s old, with the 0.2% bound only, so they are not held up
+  in a volatile market.
 
 ### Session keys
 
@@ -361,7 +364,7 @@ Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change 
 | Impact base / rate / reference notional | 10% / 15,000 / $100,000 |
 | OI cap | max(0.6 × net vault, floor) per market and side, and over all markets per side |
 | OI floors | 25,000 USDC per market and side, 50,000 USDC over all markets (to be set by stress test) |
-| Max price age / confidence | 5 s / 0.2% |
+| Max price age / confidence | 5 s / 0.2%, and on fills at most 25% of the margin's move (2.5 bps at 1000×) |
 | Min Pyth signatures | 3 |
 | Fill delay / order timeout | 2 s / 60 s |
 | Max session | 30 days |
