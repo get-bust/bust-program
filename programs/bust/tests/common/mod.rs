@@ -13,7 +13,7 @@ pub use {
         AccountDeserialize, AccountSerialize, InstructionData, ToAccountMetas,
     },
     anchor_spl::token::spl_token,
-    bust::{math, Bucket, DistParams, Params, PayoutQueue, Side},
+    bust::{math, Bucket, DistParams, Params, Side},
     litesvm::LiteSVM,
     pyth_solana_receiver_sdk::price_update::{PriceFeedMessage, PriceUpdateV2, VerificationLevel},
     solana_account::Account,
@@ -84,6 +84,9 @@ pub fn epoch_loss_pda(owner: &Pubkey, epoch: u64) -> Pubkey {
 pub fn vest_pda(owner: &Pubkey) -> Pubkey {
     pda(&[bust::VEST_SEED, owner.as_ref()])
 }
+pub fn ticket_pda(owner: &Pubkey, id: u64) -> Pubkey {
+    pda(&[bust::TICKET_SEED, owner.as_ref(), &id.to_le_bytes()])
+}
 pub fn position_pda(owner: &Pubkey, id: u64) -> Pubkey {
     pda(&[bust::POSITION_SEED, owner.as_ref(), &id.to_le_bytes()])
 }
@@ -112,7 +115,6 @@ pub struct Env {
     pub svm: LiteSVM,
     pub admin: Keypair,
     pub mint: Pubkey,
-    pub queue: Pubkey,
     pub market: Pubkey,
     pub price: Pubkey,
     /// Chain clock (unix seconds) and the last price written
@@ -143,7 +145,6 @@ impl Env {
             svm,
             admin,
             mint: Pubkey::default(),
-            queue: Pubkey::default(),
             market: market_pda(0),
             price: Pubkey::new_unique(),
             now: NOW,
@@ -221,17 +222,6 @@ impl Env {
     }
 
     pub fn initialize(&mut self, params: Params) -> Result<(), String> {
-        // The queue account is larger than 10 KB: the client creates it, initialize binds it
-        let queue = Keypair::new();
-        self.queue = queue.pubkey();
-        let rent = self.svm.minimum_balance_for_rent_exemption(PayoutQueue::SPACE);
-        let create = system_instruction::create_account(
-            &self.admin.pubkey(),
-            &queue.pubkey(),
-            rent,
-            PayoutQueue::SPACE as u64,
-            &bust::id(),
-        );
         let ix = Instruction::new_with_bytes(
             bust::id(),
             &bust::instruction::Initialize { params }.data(),
@@ -241,14 +231,13 @@ impl Env {
                 config: config(),
                 vault: vault(),
                 vault_tokens: vault_tokens(),
-                queue: queue.pubkey(),
                 token_program: spl_token::ID,
                 system_program: system_program::ID,
             }
             .to_account_metas(None),
         );
         let admin = self.admin.insecure_clone();
-        self.send(&[create, ix], &[&admin, &queue])
+        self.send(&[ix], &[&admin])
     }
 
     pub fn send(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> Result<(), String> {
@@ -376,11 +365,15 @@ impl Env {
         self.account(&distributor())
     }
 
-    /// Ledger invariant: token balance = cash + user_balances + open_margin + fees_accrued + distribution shares
+    /// Ledger invariant: token balance = cash + user_balances + open_margin + fees_accrued + paid but unclaimed queue
+    /// + distribution shares
     pub fn assert_invariant(&self) {
         let v = self.vault_state();
         let d = self.dist_state();
-        assert_eq!(self.token_balance(&vault_tokens()), v.cash + v.user_balances + v.open_margin + v.fees_accrued + d.buckets());
+        assert_eq!(
+            self.token_balance(&vault_tokens()),
+            v.cash + v.user_balances + v.open_margin + v.fees_accrued + v.queue_unclaimed + d.buckets()
+        );
     }
 
     pub fn distribute(&mut self) -> Result<(), String> {
@@ -824,7 +817,7 @@ impl Env {
                 user: user_pda(&p.owner),
                 order: *order,
                 position: o.position,
-                queue: self.queue,
+                ticket: ticket_pda(&p.owner, self.user_state(&p.owner).next_ticket_id),
                 price_update: self.price,
                 distributor: distributor(),
                 epoch_loss: epoch_loss_pda(&p.owner, self.dist_state().epoch),
@@ -875,7 +868,6 @@ impl Env {
                 market: p.market,
                 user: user_pda(&p.owner),
                 position: *position,
-                queue: self.queue,
                 price_update: self.price,
                 distributor: distributor(),
                 epoch_loss: epoch_loss_pda(&p.owner, self.dist_state().epoch),
@@ -886,12 +878,56 @@ impl Env {
         self.send(&[ix], &[&keeper])
     }
 
-    pub fn harvest(&mut self, owners: &[Pubkey]) -> Result<(), String> {
+    pub fn harvest(&mut self) -> Result<(), String> {
         let keeper = self.caller();
-        let mut metas = bust::accounts::Harvest { config: config(), vault: vault(), queue: self.queue }.to_account_metas(None);
-        metas.extend(owners.iter().map(|o| AccountMeta::new(user_pda(o), false)));
-        let ix = Instruction::new_with_bytes(bust::id(), &bust::instruction::Harvest {}.data(), metas);
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::Harvest {}.data(),
+            bust::accounts::Harvest { vault: vault() }.to_account_metas(None),
+        );
         self.send(&[ix], &[&keeper])
+    }
+
+    pub fn ticket(&self, owner: &Pubkey, id: u64) -> Option<bust::Ticket> {
+        let acc = self.svm.get_account(&ticket_pda(owner, id))?;
+        if acc.data.is_empty() {
+            return None;
+        }
+        Some(bust::Ticket::try_deserialize(&mut acc.data.as_slice()).unwrap())
+    }
+
+    /// Anyone claims; the money goes to the ticket's owner
+    pub fn claim_ticket(&mut self, owner: &Pubkey, id: u64) -> Result<(), String> {
+        let t = self.ticket(owner, id).ok_or_else(|| format!("ticket {id} of {owner} does not exist"))?;
+        self.claim_ticket_into(&user_pda(owner), owner, id, t.rent_payer)
+    }
+
+    /// The user account to credit can differ from the ticket's owner (attack tests)
+    pub fn claim_ticket_into(&mut self, user: &Pubkey, owner: &Pubkey, id: u64, rent_payer: Pubkey) -> Result<(), String> {
+        let c = self.caller();
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::ClaimTicket {}.data(),
+            bust::accounts::ClaimTicket { vault: vault(), user: *user, ticket: ticket_pda(owner, id), rent_payer }
+                .to_account_metas(None),
+        );
+        self.send(&[ix], &[&c])
+    }
+
+    /// Pays the queue with whatever cash there is, then claims every open ticket of `owners`
+    pub fn harvest_and_claim(&mut self, owners: &[Pubkey]) {
+        if self.vault_state().queue_total > 0 && self.vault_state().cash > 0 {
+            self.harvest().unwrap();
+        }
+        for o in owners {
+            for id in 0..self.user_state(o).next_ticket_id {
+                if let Some(t) = self.ticket(o, id) {
+                    if t.paid(self.vault_state().paid_cumulative) > t.claimed {
+                        self.claim_ticket(o, id).unwrap();
+                    }
+                }
+            }
+        }
     }
 
     pub fn admin_ix(&self, data: Vec<u8>) -> Instruction {

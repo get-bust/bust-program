@@ -54,7 +54,7 @@ fn distribute_waits_for_empty_queue() {
 
     // Once the queue is paid the distribution runs; seeded money is not profit, so the pool is empty
     env.seed(usdc(1_000.0));
-    env.harvest(&[w]).unwrap();
+    env.harvest_and_claim(&[w]);
     env.distribute().unwrap();
     assert_eq!(env.dist_state().buckets(), 0);
     env.assert_invariant();

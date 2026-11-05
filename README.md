@@ -52,16 +52,16 @@ traders used over the last seven days, between 20% and 80%.
 
 ## Accounts
 
-Every account except the payout queue is a PDA of the program.
+Every account is a PDA of the program.
 
 | Account | Seeds | Holds |
 |---|---|---|
-| `Config` | `config` | admin, USDC mint, pause flag, trading parameters, queue address |
-| `Vault` | `vault` | the ledger: cash, user balances, open margin, accrued fees, queued debt |
+| `Config` | `config` | admin, USDC mint, pause flag, trading parameters |
+| `Vault` | `vault` | the ledger: cash, user balances, open margin, accrued fees, queue counters |
 | vault token account | `vault_tokens` | all USDC: deposits, margin, vault cash, fees and undistributed shares |
-| `PayoutQueue` | client-created (81,944 bytes) | FIFO ring of 2,048 unpaid wins |
 | `Market` | `market`, index (u16) | Pyth feed id, impact size parameter, open interest per side |
-| `UserAccount` | `user`, owner | balance, reserved and queued amounts, session key, order and position counters |
+| `UserAccount` | `user`, owner | balance, reserved and queued amounts, session key, order, position and ticket counters |
+| `Ticket` | `ticket`, owner, id | one queued win: its place on the queue line and how much was claimed |
 | deposit address | `deposit`, owner | owns the user's deposit token account (usually its ATA); holds no data |
 | `OrderRequest` | `order`, owner, id | a pending open or close and the time it was requested |
 | `Position` | `position`, owner, id | side, margin, leverage, notional, entry and bust prices |
@@ -84,7 +84,7 @@ Every account except the payout queue is a PDA of the program.
 | Account owner | `create_user`, `deposit`, `withdraw`, `set_session`, `revoke_session`, `stake`, `request_unstake`, `withdraw_unstaked`, `claim_rewards`, `lock_xbust`, `convert_vested` |
 | Owner or session key | `request_open`, `request_close` |
 | Buyback authority | `fund_epoch` |
-| Anyone (keepers) | `sweep_deposit`, `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `claim_launch_fees`, `sweep_launch_fees`, `seed_vault` |
+| Anyone (keepers) | `sweep_deposit`, `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `claim_ticket`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `claim_launch_fees`, `sweep_launch_fees`, `seed_vault` |
 
 The permissionless instructions cannot move money anywhere the program has not fixed in advance:
 `withdraw_bucket` pays only the registered wallets, `claim_xbust` mints only to the loser's account, and the
@@ -186,18 +186,42 @@ is short.
 
 ## Payout queue
 
-When vault cash cannot cover a win, the vault pays what it holds and the remainder goes into a FIFO queue as
-`(owner, amount)`. While the queue is not empty:
+When vault cash cannot cover a win, the vault pays what it holds and the rest is queued. The queue works like
+Lido's withdrawal queue: two counters that only ever grow, on one line.
+
+```
+queued_cumulative   every amount ever queued
+paid_cumulative     every amount ever paid against the queue
+queue_total         queued_cumulative − paid_cumulative   (still owed)
+```
+
+Each queued win gets a `Ticket` PDA holding its interval `[start, start + amount)`, where `start` was
+`queued_cumulative` at the moment it was queued:
+
+```
+A wins 100 the vault cannot pay → A's ticket [0, 100)      queued_cumulative = 100
+B wins  50                      → B's ticket [100, 150)    queued_cumulative = 150
+harvest pays 120                → paid_cumulative = 120
+   A: paid min(120 − 0, 100)   = 100, fully paid
+   B: paid min(120 − 100, 50)  =  20, 30 still owed
+```
+
+- `harvest` moves `min(cash, queue_total)` from vault cash onto the queue by advancing `paid_cumulative`. It
+  touches one account, so its cost does not depend on how many tickets wait, and there is no limit on their
+  number.
+- `claim_ticket` credits the owner with what the queue has paid on the ticket since the last claim. Anyone can
+  call it; the money can only reach the ticket's owner. A fully paid ticket closes and its rent goes back to
+  the keeper who opened it.
+- Tickets are paid strictly in the order they were queued, whatever order they are claimed in.
+- The ticket's PDA is created during the close. Lamports sent to that address beforehand do not block it.
+
+While anything is owed:
 
 - new wins pay nothing up front and are queued whole;
 - no fees are taken, since they would come out of money already owed;
-- the open interest cap is computed on cash minus the queue, so it shrinks by the debt and is zero once the
+- the open interest cap is computed on cash minus the debt, so it shrinks by the debt and is zero once the
   debt reaches the cash;
-- `distribute` refuses to run.
-
-`harvest` pays entries from the head as cash comes back from losses or seeding. Anyone can call it, and it
-checks that each passed account is the PDA of the entry's owner. The queue holds 2,048 entries; it is larger
-than the 10 KB CPI limit, so the client creates the account and `initialize` binds it.
+- `distribute` refuses to run. Paid but unclaimed tickets do not hold it up.
 
 ## Epoch distribution
 
@@ -275,9 +299,11 @@ $BUST launches from Bust's own Raydium LaunchLab platform, and the platform's fe
 These hold after every instruction, and the randomised test checks all of them after every step:
 
 ```
-vault token balance = cash + user_balances + open_margin + fees_accrued + distributor shares
+vault token balance = cash + user_balances + open_margin + fees_accrued + queue_unclaimed
+                      + distributor shares
 user_balances       = Σ (balance + reserved) over users
-queue_total         = Σ queued over users                   (debt with no tokens behind it)
+queue_total + queue_unclaimed = Σ queued over users
+queue_total         = queued_cumulative − paid_cumulative   (debt with no tokens behind it)
 epoch_loss          = Σ loss over this epoch's EpochLoss records
 ```
 

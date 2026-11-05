@@ -188,7 +188,11 @@ pub mod bust {
         instructions::trade::handle_liquidate(ctx)
     }
 
-    pub fn harvest<'info>(ctx: Context<'info, Harvest<'info>>) -> Result<()> {
+    pub fn harvest(ctx: Context<Harvest>) -> Result<()> {
         instructions::queue::handle_harvest(ctx)
+    }
+
+    pub fn claim_ticket(ctx: Context<ClaimTicket>) -> Result<()> {
+        instructions::queue::handle_claim_ticket(ctx)
     }
 }

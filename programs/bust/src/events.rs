@@ -30,9 +30,30 @@ pub struct PositionClosed {
 }
 
 #[event]
-pub struct QueuePaid {
+pub struct TicketOpened {
     pub owner: Pubkey,
+    pub ticket: Pubkey,
+    pub id: u64,
+    /// Position on the queue line: paid once paid_cumulative passes start + amount
+    pub start: u64,
     pub amount: u64,
+}
+
+#[event]
+pub struct QueuePaid {
+    pub amount: u64,
+    pub paid_cumulative: u64,
+    /// Still owed after this payment
+    pub queue_total: u64,
+}
+
+#[event]
+pub struct TicketClaimed {
+    pub owner: Pubkey,
+    pub ticket: Pubkey,
+    pub amount: u64,
+    /// The ticket is fully paid and its account closed
+    pub closed: bool,
 }
 
 #[event]

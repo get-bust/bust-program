@@ -30,7 +30,8 @@ fn check_ledgers(env: &Env, owners: &[Pubkey]) {
     let v = env.vault_state();
     let users: Vec<bust::UserAccount> = owners.iter().map(|o| env.user_state(o)).collect();
     assert_eq!(users.iter().map(|u| u.balance + u.reserved).sum::<u64>(), v.user_balances, "user balances");
-    assert_eq!(users.iter().map(|u| u.queued).sum::<u64>(), v.queue_total, "queue");
+    assert_eq!(users.iter().map(|u| u.queued).sum::<u64>(), v.queue_total + v.queue_unclaimed, "queue");
+    assert_eq!(v.queued_cumulative - v.paid_cumulative, v.queue_total, "queue line");
     let d = env.dist_state();
     let losses: u64 = owners
         .iter()
@@ -89,12 +90,7 @@ fn random_operations_keep_every_ledger_balanced() {
                     allowed(env.distribute());
                 }
                 5 => env.seed(usdc(50.0 + rng.pick(500) as f64)),
-                _ => {
-                    let queued: Vec<Pubkey> = owners.iter().copied().filter(|o| env.user_state(o).queued > 0).collect();
-                    if !queued.is_empty() && env.vault_state().cash > 0 {
-                        allowed(env.harvest(&queued[..1]));
-                    }
-                }
+                _ => env.harvest_and_claim(&owners),
             }
             check_ledgers(&env, &owners);
         }

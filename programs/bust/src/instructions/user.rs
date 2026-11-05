@@ -32,6 +32,7 @@ pub fn handle_create_user(ctx: Context<CreateUser>) -> Result<()> {
         session_expires_at: 0,
         next_position_id: 0,
         next_order_id: 0,
+        next_ticket_id: 0,
         bump: ctx.bumps.user,
     });
     Ok(())

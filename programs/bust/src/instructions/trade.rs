@@ -1,10 +1,13 @@
-use anchor_lang::prelude::*;
+use anchor_lang::{
+    prelude::*,
+    system_program::{self as sys, Allocate, Assign, CreateAccount, Transfer},
+};
 use pyth_solana_receiver_sdk::price_update::{PriceUpdateV2, VerificationLevel};
 
 use crate::{
     constants::*,
     error::PerpError,
-    events::{OrderCancelled, OrderRequested, PositionClosed, PositionOpened},
+    events::{OrderCancelled, OrderRequested, PositionClosed, PositionOpened, TicketOpened},
     math,
     state::*,
 };
@@ -265,6 +268,8 @@ struct Settlement {
     raw_pnl: i128,
     paid: u64,
     queued: u64,
+    /// Where the queued part starts on the queue line
+    ticket_start: u64,
     fee: u64,
 }
 
@@ -274,7 +279,6 @@ fn settle(
     vault: &mut Vault,
     market: &mut Market,
     user: &mut UserAccount,
-    queue: &mut PayoutQueue,
     position: &Position,
     exit: u64,
     liquidate: bool,
@@ -289,7 +293,7 @@ fn settle(
     let queue_empty = vault.queue_total == 0;
     let raw = math::raw_pnl(position.side, position.entry_price, exit, position.notional);
     let margin = position.margin;
-    let mut s = Settlement { liquidated: false, raw_pnl: raw, paid: 0, queued: 0, fee: 0 };
+    let mut s = Settlement { liquidated: false, raw_pnl: raw, paid: 0, queued: 0, ticket_start: 0, fee: 0 };
 
     if liquidate || math::is_bust(position.side, exit, position.bust_price) {
         // Hard bust: the whole margin goes to the vault
@@ -318,7 +322,8 @@ fn settle(
         s.queued = win.net - profit;
         s.paid = margin + profit;
         if s.queued > 0 {
-            require!(queue.push(position.owner, s.queued), PerpError::QueueFull);
+            s.ticket_start = vault.queued_cumulative;
+            vault.queued_cumulative = vault.queued_cumulative.checked_add(s.queued).ok_or(PerpError::MathOverflow)?;
             vault.queue_total = vault.queue_total.checked_add(s.queued).ok_or(PerpError::MathOverflow)?;
             user.queued = user.queued.checked_add(s.queued).ok_or(PerpError::MathOverflow)?;
         }
@@ -328,6 +333,46 @@ fn settle(
     user.balance = user.balance.checked_add(s.paid).ok_or(PerpError::MathOverflow)?;
     vault.user_balances = vault.user_balances.checked_add(s.paid).ok_or(PerpError::MathOverflow)?;
     Ok(s)
+}
+
+/// Opens the owner's next ticket for the part of a win the vault could not pay. The keeper closing the position
+/// pays the rent and gets it back when the ticket is fully claimed.
+fn open_ticket<'info>(
+    ticket: &UncheckedAccount<'info>,
+    payer: &Signer<'info>,
+    system: &Program<'info, System>,
+    user: &mut UserAccount,
+    bump: u8,
+    start: u64,
+    amount: u64,
+) -> Result<()> {
+    let (owner, id) = (user.owner, user.next_ticket_id);
+    let space = 8 + Ticket::INIT_SPACE;
+    let rent = Rent::get()?.minimum_balance(space);
+    let (id_bytes, bump_bytes) = (id.to_le_bytes(), [bump]);
+    let seeds: &[&[&[u8]]] = &[&[TICKET_SEED, owner.as_ref(), &id_bytes, &bump_bytes]];
+    let info = ticket.to_account_info();
+    // Anyone can send lamports to the PDA beforehand. Creating it must work then too,
+    // or one lamport would be enough to block a winning close
+    if info.lamports() == 0 {
+        let accounts = CreateAccount { from: payer.to_account_info(), to: info.clone() };
+        sys::create_account(CpiContext::new_with_signer(system.key(), accounts, seeds), rent, space as u64, &crate::ID)?;
+    } else {
+        let top_up = rent.saturating_sub(info.lamports());
+        if top_up > 0 {
+            let accounts = Transfer { from: payer.to_account_info(), to: info.clone() };
+            sys::transfer(CpiContext::new(system.key(), accounts), top_up)?;
+        }
+        let accounts = Allocate { account_to_allocate: info.clone() };
+        sys::allocate(CpiContext::new_with_signer(system.key(), accounts, seeds), space as u64)?;
+        let accounts = Assign { account_to_assign: info.clone() };
+        sys::assign(CpiContext::new_with_signer(system.key(), accounts, seeds), &crate::ID)?;
+    }
+    let record = Ticket { owner, id, start, amount, claimed: 0, rent_payer: payer.key(), bump };
+    record.try_serialize(&mut &mut info.try_borrow_mut_data()?[..])?;
+    user.next_ticket_id = id.checked_add(1).ok_or(PerpError::MathOverflow)?;
+    emit!(TicketOpened { owner, ticket: info.key(), id, start, amount });
+    Ok(())
 }
 
 /// Writes the user's net result for the epoch and moves the epoch's total loss by the difference
@@ -411,8 +456,9 @@ pub struct ExecuteClose<'info> {
         bump = position.bump,
     )]
     pub position: Box<Account<'info, Position>>,
-    #[account(mut, address = config.queue)]
-    pub queue: AccountLoader<'info, PayoutQueue>,
+    /// CHECK: The PDA of the owner's next ticket; created only if the close queues part of a win
+    #[account(mut, seeds = [TICKET_SEED, position.owner.as_ref(), &user.next_ticket_id.to_le_bytes()], bump)]
+    pub ticket: UncheckedAccount<'info>,
     pub price_update: Box<Account<'info, PriceUpdateV2>>,
     #[account(mut, seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
     pub distributor: Box<Account<'info, Distributor>>,
@@ -431,18 +477,26 @@ pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
     let params = ctx.accounts.config.params;
     let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params)?;
     check_fill_window(&read, ctx.accounts.order.requested_at, &params)?;
-    let mut queue = ctx.accounts.queue.load_mut()?;
     let s = settle(
         &params,
         &mut ctx.accounts.vault,
         &mut ctx.accounts.market,
         &mut ctx.accounts.user,
-        &mut queue,
         &ctx.accounts.position,
         read.price,
         false,
     )?;
-    drop(queue);
+    if s.queued > 0 {
+        open_ticket(
+            &ctx.accounts.ticket,
+            &ctx.accounts.keeper,
+            &ctx.accounts.system_program,
+            &mut ctx.accounts.user,
+            ctx.bumps.ticket,
+            s.ticket_start,
+            s.queued,
+        )?;
+    }
     record_result(
         &mut ctx.accounts.distributor,
         &mut ctx.accounts.epoch_loss,
@@ -516,8 +570,6 @@ pub struct Liquidate<'info> {
         bump = position.bump,
     )]
     pub position: Box<Account<'info, Position>>,
-    #[account(mut, address = config.queue)]
-    pub queue: AccountLoader<'info, PayoutQueue>,
     pub price_update: Box<Account<'info, PriceUpdateV2>>,
     #[account(mut, seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
     pub distributor: Box<Account<'info, Distributor>>,
@@ -537,18 +589,8 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params)?;
     let position = &ctx.accounts.position;
     require!(math::is_bust(position.side, read.price, position.bust_price), PerpError::NotLiquidatable);
-    let mut queue = ctx.accounts.queue.load_mut()?;
-    let s = settle(
-        &params,
-        &mut ctx.accounts.vault,
-        &mut ctx.accounts.market,
-        &mut ctx.accounts.user,
-        &mut queue,
-        position,
-        read.price,
-        true,
-    )?;
-    drop(queue);
+    let s =
+        settle(&params, &mut ctx.accounts.vault, &mut ctx.accounts.market, &mut ctx.accounts.user, position, read.price, true)?;
     record_result(
         &mut ctx.accounts.distributor,
         &mut ctx.accounts.epoch_loss,

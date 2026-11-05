@@ -14,6 +14,9 @@ pub const USER_SEED: &[u8] = b"user";
 pub const POSITION_SEED: &[u8] = b"position";
 #[constant]
 pub const ORDER_SEED: &[u8] = b"order";
+/// A queued win: one ticket per win the vault could not pay, numbered per owner
+#[constant]
+pub const TICKET_SEED: &[u8] = b"ticket";
 #[constant]
 pub const DISTRIBUTOR_SEED: &[u8] = b"distributor";
 #[constant]
@@ -62,6 +65,3 @@ pub const PRICE_EXPONENT: i32 = -8;
 pub const PPM: u128 = 1_000_000;
 /// Fixed-point scale for intermediate values
 pub const SCALE: u128 = 1_000_000_000_000;
-
-/// Capacity of the FIFO queue of winnings the vault could not pay yet
-pub const QUEUE_CAPACITY: usize = 2048;

@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::{DAY_SEC, QUEUE_CAPACITY};
+use crate::constants::DAY_SEC;
 
 /// Tunable parameters (rates in ppm, ages in seconds)
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, Debug, PartialEq, Eq)]
@@ -84,13 +84,15 @@ pub struct Config {
     /// Stops new positions; closes, liquidations and withdrawals keep working
     pub paused: bool,
     pub params: Params,
-    /// The payout queue account (larger than 10 KB, created by the client)
-    pub queue: Pubkey,
     pub bump: u8,
 }
 
-/// Vault ledger. Invariant: vault_tokens balance = cash + user_balances + open_margin + fees_accrued.
-/// queue_total is owed to users and has no tokens behind it; harvest pays it as cash comes in.
+/// Vault ledger. Invariant: vault_tokens balance = cash + user_balances + open_margin + fees_accrued + queue_unclaimed.
+///
+/// The payout queue is two ever-growing counters on one line, like Lido's withdrawal queue. Each win the vault cannot
+/// cover takes the interval [queued_cumulative, queued_cumulative + amount) on it as a Ticket, and harvest moves
+/// paid_cumulative forward with cash. A ticket is paid for the part of its interval below paid_cumulative, so wins are
+/// paid strictly in order, with no list to store and no limit on how many wait.
 #[account]
 #[derive(InitSpace)]
 pub struct Vault {
@@ -98,7 +100,13 @@ pub struct Vault {
     pub user_balances: u64,
     pub open_margin: u64,
     pub fees_accrued: u64,
+    /// Owed to ticket holders and not paid yet; no tokens behind it
     pub queue_total: u64,
+    /// Paid to tickets and not yet claimed into balances; the tokens are in the vault
+    pub queue_unclaimed: u64,
+    /// Every amount ever queued, and every amount ever paid against the queue
+    pub queued_cumulative: u64,
+    pub paid_cumulative: u64,
     pub bump: u8,
     pub tokens_bump: u8,
 }
@@ -388,12 +396,14 @@ pub struct UserAccount {
     pub balance: u64,
     /// Margin locked in pending open orders (counted in user_balances)
     pub reserved: u64,
+    /// Still owed on this user's open tickets, paid or not, until claimed into the balance
     pub queued: u64,
     /// Pubkey::default() when there is no session
     pub session_key: Pubkey,
     pub session_expires_at: i64,
     pub next_position_id: u64,
     pub next_order_id: u64,
+    pub next_ticket_id: u64,
     pub bump: u8,
 }
 
@@ -448,45 +458,23 @@ pub struct Position {
     pub bump: u8,
 }
 
-#[zero_copy]
-pub struct QueueEntry {
+/// One queued win: the interval [start, start + amount) on the queue line, and how much of it was claimed
+#[account]
+#[derive(InitSpace)]
+pub struct Ticket {
     pub owner: Pubkey,
+    pub id: u64,
+    pub start: u64,
     pub amount: u64,
+    pub claimed: u64,
+    /// The keeper that closed the position paid the rent and gets it back when the ticket closes
+    pub rent_payer: Pubkey,
+    pub bump: u8,
 }
 
-/// FIFO ring buffer of winnings the vault could not pay.
-/// Larger than 10 KB, so the client creates the account and initialize binds it.
-#[account(zero_copy)]
-pub struct PayoutQueue {
-    pub head: u64,
-    pub len: u64,
-    pub entries: [QueueEntry; QUEUE_CAPACITY],
-}
-
-impl PayoutQueue {
-    pub const SPACE: usize = 8 + 8 + 8 + QUEUE_CAPACITY * (32 + 8);
-
-    pub fn push(&mut self, owner: Pubkey, amount: u64) -> bool {
-        if self.len as usize >= QUEUE_CAPACITY {
-            return false;
-        }
-        let slot = ((self.head + self.len) as usize) % QUEUE_CAPACITY;
-        self.entries[slot] = QueueEntry { owner, amount };
-        self.len += 1;
-        true
-    }
-
-    pub fn front_mut(&mut self) -> Option<&mut QueueEntry> {
-        if self.len == 0 {
-            return None;
-        }
-        Some(&mut self.entries[self.head as usize % QUEUE_CAPACITY])
-    }
-
-    pub fn pop(&mut self) {
-        if self.len > 0 {
-            self.head = (self.head + 1) % QUEUE_CAPACITY as u64;
-            self.len -= 1;
-        }
+impl Ticket {
+    /// How much of the ticket the queue has paid so far
+    pub fn paid(&self, paid_cumulative: u64) -> u64 {
+        paid_cumulative.saturating_sub(self.start).min(self.amount)
     }
 }

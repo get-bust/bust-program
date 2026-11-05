@@ -23,22 +23,17 @@ pub struct Initialize<'info> {
         token::authority = vault,
     )]
     pub vault_tokens: Account<'info, TokenAccount>,
-    /// Created by the client with PayoutQueue::SPACE bytes and this program as the owner
-    #[account(zero)]
-    pub queue: AccountLoader<'info, PayoutQueue>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
 pub fn handle_initialize(ctx: Context<Initialize>, params: Params) -> Result<()> {
     require!(params.validate(), PerpError::InvalidConfig);
-    ctx.accounts.queue.load_init()?;
     ctx.accounts.config.set_inner(Config {
         admin: ctx.accounts.admin.key(),
         usdc_mint: ctx.accounts.usdc_mint.key(),
         paused: false,
         params,
-        queue: ctx.accounts.queue.key(),
         bump: ctx.bumps.config,
     });
     ctx.accounts.vault.set_inner(Vault {
@@ -47,6 +42,9 @@ pub fn handle_initialize(ctx: Context<Initialize>, params: Params) -> Result<()>
         open_margin: 0,
         fees_accrued: 0,
         queue_total: 0,
+        queue_unclaimed: 0,
+        queued_cumulative: 0,
+        paid_cumulative: 0,
         bump: ctx.bumps.vault,
         tokens_bump: ctx.bumps.vault_tokens,
     });

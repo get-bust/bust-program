@@ -209,7 +209,7 @@ fn close_order_must_match_its_position() {
             user: user_pda(&owner),
             order,
             position: b,
-            queue: env.queue,
+            ticket: ticket_pda(&owner, env.user_state(&owner).next_ticket_id),
             price_update: env.price,
             distributor: distributor(),
             epoch_loss: epoch_loss_pda(&owner, env.dist_state().epoch),
