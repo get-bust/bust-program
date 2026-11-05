@@ -227,3 +227,23 @@ fn only_admin_updates_distributor() {
     );
     expect_err(env.send(&[ix], &[&admin]), "InvalidConfig");
 }
+
+#[test]
+fn utilization_needs_every_market_in_order() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let admin = env.admin.insecure_clone();
+    env.add_market(&admin, 1, [9u8; 32], ETH_MULT).unwrap();
+    let t = env.trader(usdc(2_000.0));
+    let o = t.kp.pubkey();
+    env.open(&o, &t.kp, Side::Long, usdc(1_000.0), 10).unwrap(); // market 0 is the busy one
+    let (m0, m1) = (market_pda(0), market_pda(1));
+
+    // Leaving out the busy market would lower the sample, and so the vault's share
+    expect_err(env.record_utilization(&[m1]), "MarketsMismatch");
+    expect_err(env.record_utilization(&[m1, m0]), "MarketsMismatch");
+    expect_err(env.record_utilization(&[m0, m0]), "MarketsMismatch");
+    expect_err(env.record_utilization(&[m0, m1, m1]), "MarketsMismatch");
+    env.record_utilization(&[m0, m1]).unwrap();
+    assert!(env.dist_state().util_last > 600_000);
+}

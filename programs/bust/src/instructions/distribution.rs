@@ -86,11 +86,12 @@ pub struct RecordUtilization<'info> {
     pub vault: Account<'info, Vault>,
     #[account(mut, seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
     pub distributor: Account<'info, Distributor>,
-    // remaining_accounts: Market accounts (owner and type checked by Account::try_from)
+    // remaining_accounts: every Market, in index order
 }
 
-/// Samples open interest utilisation. It only reads chain state, so the caller gets no choice, and the sample is
-/// weighted by how long it stands: calling often during a brief spike adds nothing
+/// Samples open interest utilisation over every market. It only reads chain state and must be given all markets, so
+/// the caller gets no choice; and the sample is weighted by how long it stands, so calling often during a brief spike
+/// adds nothing
 pub fn handle_record_utilization<'info>(ctx: Context<'info, RecordUtilization<'info>>) -> Result<()> {
     let (vault, params) = (&ctx.accounts.vault, &ctx.accounts.config.params);
     let net = vault.net_equity();
@@ -98,8 +99,7 @@ pub fn handle_record_utilization<'info>(ctx: Context<'info, RecordUtilization<'i
     let total_cap = math::oi_cap(net, params.oi_total_cap_ratio_ppm, params.oi_total_floor);
     // The busiest market, or all markets together on one side, whichever is closer to its cap
     let mut util = math::utilization(vault.oi_long_total, vault.oi_short_total, total_cap);
-    for info in ctx.remaining_accounts.iter() {
-        let market: Account<Market> = Account::try_from(info)?;
+    for market in all_markets(ctx.remaining_accounts, &ctx.accounts.config)? {
         util = util.max(math::utilization(market.oi_long, market.oi_short, cap));
     }
     ctx.accounts.distributor.record_util(Clock::get()?.unix_timestamp, util);

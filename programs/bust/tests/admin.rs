@@ -68,7 +68,10 @@ fn admin_adds_markets_once_per_index() {
     let stranger = env.caller();
     expect_err(env.add_market(&stranger, 1, [9u8; 32], ETH_MULT), "ConstraintHasOne");
 
+    // indexes come in order, with no gaps
+    expect_err(env.add_market(&admin, 2, [9u8; 32], ETH_MULT), "InvalidConfig");
     env.add_market(&admin, 1, [9u8; 32], 814_598).unwrap();
+    assert_eq!(env.config_state().market_count, 2);
     let m: bust::Market = env.account(&market_pda(1));
     assert_eq!((m.index, m.feed_id), (1, [9u8; 32]));
 }

@@ -56,10 +56,10 @@ Every account is a PDA of the program.
 
 | Account | Seeds | Holds |
 |---|---|---|
-| `Config` | `config` | admin, USDC mint, pause flag, trading parameters |
+| `Config` | `config` | admin, USDC mint, pause flag, trading parameters, market count |
 | `Vault` | `vault` | the ledger: cash, user balances, open margin, accrued fees, queue counters |
 | vault token account | `vault_tokens` | all USDC: deposits, margin, vault cash, fees and undistributed shares |
-| `Market` | `market`, index (u16) | Pyth feed id, impact size parameter, open interest per side |
+| `Market` | `market`, index (u16) | Pyth feed id, impact size parameter, open interest per side; indexes run 0..market_count with no gaps |
 | `UserAccount` | `user`, owner | balance, reserved and queued amounts, session key, order, position and ticket counters |
 | `Ticket` | `ticket`, owner, id | one queued win: its place on the queue line and how much was claimed |
 | deposit address | `deposit`, owner | owns the user's deposit token account (usually its ATA); holds no data |
@@ -253,8 +253,10 @@ burn 40% · stakers 30% · xBUST 15% · developer 15% (rounding remainder to the
 - **High-water mark.** Profit is only what vault cash gained since the last distribution. A losing stretch has
   to be won back before anything is paid out. `seed_vault` and LaunchLab fees raise the mark by what they add,
   so capital put in is never distributed as profit.
-- **Utilisation.** `record_utilization` samples `max(OI long, OI short) / cap` across the markets passed in. It
-  reads only market accounts the program owns, so the caller cannot choose the number. Each sample counts from
+- **Utilisation.** `record_utilization` samples `max(OI long, OI short) / cap` over every market, and the total
+  over all markets against its own cap. It must be given exactly markets `0..market_count` in index order and
+  reads only market accounts the program owns, so the caller cannot leave out the busiest market or choose the
+  number. Each sample counts from
   when it is recorded until the next one, and each day keeps the integral, so a day's figure is a time-weighted
   average: opening a huge position for a few seconds and sampling it many times weighs only those seconds.
 - **The money stays put.** The shares are ledger entries; the USDC stays in the vault token account until it is

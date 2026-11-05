@@ -99,6 +99,8 @@ pub struct Config {
     /// Stops new positions; closes, liquidations and withdrawals keep working
     pub paused: bool,
     pub params: Params,
+    /// Markets are numbered 0..market_count with no gaps; instructions that need every market check them against it
+    pub market_count: u16,
     pub bump: u8,
 }
 
@@ -440,6 +442,21 @@ pub struct Market {
     pub oi_long: u64,
     pub oi_short: u64,
     pub bump: u8,
+}
+
+/// Reads every market from `infos`, which must be exactly markets 0..config.market_count in index order
+pub fn all_markets<'info>(infos: &'info [AccountInfo<'info>], config: &Config) -> Result<Vec<Account<'info, Market>>> {
+    require!(infos.len() == config.market_count as usize, crate::error::PerpError::MarketsMismatch);
+    infos
+        .iter()
+        .enumerate()
+        .map(|(i, info)| {
+            // owner and type come from try_from; a market account only ever exists at the PDA of its own index
+            let market: Account<Market> = Account::try_from(info)?;
+            require!(market.index as usize == i, crate::error::PerpError::MarketsMismatch);
+            Ok(market)
+        })
+        .collect()
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, Debug, PartialEq, Eq)]

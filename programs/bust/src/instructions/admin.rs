@@ -34,6 +34,7 @@ pub fn handle_initialize(ctx: Context<Initialize>, params: Params) -> Result<()>
         usdc_mint: ctx.accounts.usdc_mint.key(),
         paused: false,
         params,
+        market_count: 0,
         bump: ctx.bumps.config,
     });
     ctx.accounts.vault.set_inner(Vault {
@@ -80,7 +81,7 @@ pub fn handle_set_paused(ctx: Context<AdminOnly>, paused: bool) -> Result<()> {
 pub struct AddMarket<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
-    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = admin)]
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump, has_one = admin)]
     pub config: Account<'info, Config>,
     #[account(
         init,
@@ -101,6 +102,10 @@ pub fn handle_add_market(
     position_multiplier_milli: u64,
 ) -> Result<()> {
     require!(position_multiplier_milli > 0, PerpError::InvalidConfig);
+    // the next index only, so that 0..market_count is every market
+    let config = &mut ctx.accounts.config;
+    require!(index == config.market_count, PerpError::InvalidConfig);
+    config.market_count = config.market_count.checked_add(1).ok_or(PerpError::MathOverflow)?;
     ctx.accounts.market.set_inner(Market {
         index,
         symbol,

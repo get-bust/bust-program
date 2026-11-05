@@ -58,4 +58,6 @@ pub enum PerpError {
     FundingWindowClosed,
     #[msg("The epoch can still be funded")]
     FundingWindowOpen,
+    #[msg("Every market must be passed, in index order")]
+    MarketsMismatch,
 }
