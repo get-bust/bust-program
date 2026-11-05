@@ -113,6 +113,8 @@ pub fn handle_add_market(
         position_multiplier_milli,
         oi_long: 0,
         oi_short: 0,
+        long_units: 0,
+        short_units: 0,
         bump: ctx.bumps.market,
     });
     Ok(())

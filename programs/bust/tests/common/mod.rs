@@ -422,22 +422,29 @@ impl Env {
         );
     }
 
+    /// Every market, then one price account per market (`prices[i]` for market i)
     pub fn distribute(&mut self) -> Result<(), String> {
+        let prices = vec![self.price];
+        self.distribute_with(&prices)
+    }
+
+    pub fn distribute_with(&mut self, prices: &[Pubkey]) -> Result<(), String> {
         let c = self.caller();
         let epoch = self.dist_state().epoch;
-        let ix = Instruction::new_with_bytes(
-            bust::id(),
-            &bust::instruction::Distribute {}.data(),
-            bust::accounts::Distribute {
-                caller: c.pubkey(),
-                vault: vault(),
-                distributor: distributor(),
-                stake_pool: stake_pool(),
-                epoch_record: epoch_pda(epoch),
-                system_program: system_program::ID,
-            }
-            .to_account_metas(None),
-        );
+        let n = self.config_state().market_count;
+        let mut metas = bust::accounts::Distribute {
+            caller: c.pubkey(),
+            config: config(),
+            vault: vault(),
+            distributor: distributor(),
+            stake_pool: stake_pool(),
+            epoch_record: epoch_pda(epoch),
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None);
+        metas.extend((0..n).map(|i| AccountMeta::new_readonly(market_pda(i), false)));
+        metas.extend(prices.iter().map(|p| AccountMeta::new_readonly(*p, false)));
+        let ix = Instruction::new_with_bytes(bust::id(), &bust::instruction::Distribute {}.data(), metas);
         self.send(&[ix], &[&c])
     }
 

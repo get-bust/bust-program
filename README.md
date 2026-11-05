@@ -246,13 +246,18 @@ While anything is owed:
 Once an epoch has ended and the queue is empty, anyone can call `distribute`:
 
 ```
-profit    = vault cash − high-water mark
+profit    = vault cash − high-water mark − what open positions are up
 keep      = clamp(highest daily average utilisation over the last 7 days, 20%, 80%)
 from_cash = profit × (1 − keep)
 pool      = from_cash + accrued fees
 burn 40% · stakers 30% · xBUST 15% · developer 15% (rounding remainder to the developer)
 ```
 
+- **Open positions.** Cash the vault holds is not all profit while traders are up on open positions: those wins
+  will be paid out of it. Each market keeps `Σ notional / entry` per side next to its open interest, so a
+  side's unrealised PnL at any price is one formula (`p · Σ(n/e) − Σn` for longs). `distribute` takes every
+  market with a fresh price, adds up the sides that are up (before haircuts, and without netting the sides that
+  are down, so it is an upper bound) and holds that back from the profit.
 - **High-water mark.** Profit is only what vault cash gained since the last distribution. A losing stretch has
   to be won back before anything is paid out. `seed_vault` and LaunchLab fees raise the mark by what they add,
   so capital put in is never distributed as profit.

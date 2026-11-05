@@ -116,6 +116,24 @@ pub fn utilization(oi_long: u64, oi_short: u64, cap: u64) -> u32 {
     (oi * PPM / cap as u128).min(PPM) as u32
 }
 
+/// A position's weight in its market's unrealised PnL: notional × SCALE / entry
+pub fn pnl_units(notional: u64, entry: u64) -> u128 {
+    notional as u128 * SCALE / entry as u128
+}
+
+/// Unrealised PnL of every open position on one side of a market at `price`, before haircuts (profit +, loss −).
+/// Longs: Σ n·(p − e)/e = p·Σ(n/e) − Σn; shorts the opposite
+pub fn side_pnl(side: Side, price: u64, oi: u64, units: u128) -> i128 {
+    let price = price as u128;
+    // units × price / SCALE without overflowing for any price
+    let value = (units / SCALE).saturating_mul(price).saturating_add((units % SCALE) * price / SCALE);
+    let value = value.min(i128::MAX as u128) as i128;
+    match side {
+        Side::Long => value - oi as i128,
+        Side::Short => oi as i128 - value,
+    }
+}
+
 /// Open interest cap: max(max(0, net vault) × ratio, floor)
 pub fn oi_cap(net_equity: i128, ratio_ppm: u32, floor: u64) -> u64 {
     let by_vault = if net_equity <= 0 { 0 } else { (net_equity as u128 * ratio_ppm as u128 / PPM).min(u64::MAX as u128) as u64 };

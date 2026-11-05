@@ -1,10 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 use crate::{
     constants::*,
     error::PerpError,
     events::{BucketWithdrawn, Distributed},
+    instructions::trade::read_price,
     math,
     state::*,
 };
@@ -113,6 +115,8 @@ pub struct Distribute<'info> {
     /// Pays the rent of the closing epoch's record
     #[account(mut)]
     pub caller: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
     #[account(mut, seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
@@ -129,18 +133,40 @@ pub struct Distribute<'info> {
     )]
     pub epoch_record: Account<'info, EpochRecord>,
     pub system_program: Program<'info, System>,
+    // remaining_accounts: every Market in index order, then a fresh Pyth price for each, in the same order
+}
+
+/// What open positions are up in total at the latest prices, before haircuts: the sum of each market side's
+/// unrealised PnL where it is positive. Sides that are down are not netted against it, which keeps it an upper bound
+fn unrealized_profit<'info>(infos: &'info [AccountInfo<'info>], config: &Config) -> Result<u64> {
+    let n = config.market_count as usize;
+    require!(infos.len() == 2 * n, PerpError::MarketsMismatch);
+    let markets = all_markets(&infos[..n], config)?;
+    let mut total: u128 = 0;
+    for (market, info) in markets.iter().zip(&infos[n..]) {
+        let update: Account<PriceUpdateV2> = Account::try_from(info)?;
+        let read = read_price(&update, &market.feed_id, &config.params, config.params.max_price_age_sec)?;
+        for (side, oi, units) in
+            [(Side::Long, market.oi_long, market.long_units), (Side::Short, market.oi_short, market.short_units)]
+        {
+            total += math::side_pnl(side, read.price, oi, units).max(0) as u128;
+        }
+    }
+    Ok(total.min(u64::MAX as u128) as u64)
 }
 
 /// With the queue empty: all fees and the (1 − u) part of profit above the high-water mark are split into four shares.
+/// Profit that open positions are sitting on is not the vault's yet, so it is held back until they close.
 /// The money stays in the vault token account; only the ledger moves it from the vault to the shares.
-pub fn handle_distribute(ctx: Context<Distribute>) -> Result<()> {
+pub fn handle_distribute<'info>(ctx: Context<'info, Distribute<'info>>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
+    let unrealized = unrealized_profit(ctx.remaining_accounts, &ctx.accounts.config)?;
     let vault = &mut ctx.accounts.vault;
     let d = &mut ctx.accounts.distributor;
     require!(now >= d.epoch_started_at + d.params.epoch_sec, PerpError::EpochNotOver);
     require!(vault.queue_total == 0, PerpError::QueueNotEmpty);
 
-    let profit = vault.cash.saturating_sub(d.cash_mark);
+    let profit = vault.cash.saturating_sub(d.cash_mark).saturating_sub(unrealized);
     d.accrue_util(now);
     let today = now.div_euclid(DAY_SEC);
     let keep = d.peak_util(today).clamp(d.params.keep_min_ppm, d.params.keep_max_ppm);
@@ -181,6 +207,7 @@ pub fn handle_distribute(ctx: Context<Distribute>) -> Result<()> {
     emit!(Distributed {
         epoch: d.epoch,
         profit,
+        unrealized,
         keep_ppm: keep,
         pool: s.pool,
         burn: s.burn,

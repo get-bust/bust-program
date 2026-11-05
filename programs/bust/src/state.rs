@@ -446,6 +446,10 @@ pub struct Market {
     pub position_multiplier_milli: u64,
     pub oi_long: u64,
     pub oi_short: u64,
+    /// Σ notional × SCALE / entry over open positions on each side. With the OI it gives the side's unrealised PnL at
+    /// any price in one step: price × units / SCALE − OI for longs (math::side_pnl)
+    pub long_units: u128,
+    pub short_units: u128,
     pub bump: u8,
 }
 

@@ -54,7 +54,7 @@ pub mod bust {
         instructions::distribution::handle_record_utilization(ctx)
     }
 
-    pub fn distribute(ctx: Context<Distribute>) -> Result<()> {
+    pub fn distribute<'info>(ctx: Context<'info, Distribute<'info>>) -> Result<()> {
         instructions::distribution::handle_distribute(ctx)
     }
 

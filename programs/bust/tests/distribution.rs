@@ -247,3 +247,74 @@ fn utilization_needs_every_market_in_order() {
     env.record_utilization(&[m0, m1]).unwrap();
     assert!(env.dist_state().util_last > 600_000);
 }
+
+// ---------- profit that open positions are sitting on
+
+#[test]
+fn profit_open_positions_are_up_is_not_distributed() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    // A loss puts 49 USDC of profit in the vault
+    let loser = env.trader(usdc(1_000.0));
+    let l = loser.kp.pubkey();
+    let pos = env.open(&l, &loser.kp, Side::Long, usdc(100.0), 10).unwrap();
+    env.close_at(&pos, &loser.kp, 95.0).unwrap();
+    // Meanwhile a long opened at 95 is up 31.58 USDC at 98 (1,000 × 3/95, before haircuts)
+    let winner = env.trader(usdc(1_000.0));
+    let w = winner.kp.pubkey();
+    env.open(&w, &winner.kp, Side::Long, usdc(100.0), 10).unwrap();
+    env.next_epoch();
+    env.set_price(98.0);
+
+    let v = env.vault_state();
+    let above_mark = v.cash - env.dist_state().cash_mark;
+    let m: bust::Market = env.account(&env.market);
+    let up = math::side_pnl(Side::Long, 98_0000_0000, m.oi_long, m.long_units);
+    assert!(up > usdc(30.0) as i128 && up < usdc(32.0) as i128, "{up}");
+    env.distribute().unwrap();
+    // Only the profit beyond what the open long is up gets split
+    let want = math::split(above_mark - up as u64, v.fees_accrued, DistParams::DEFAULT.keep_min_ppm, &DistParams::DEFAULT);
+    assert_eq!(v.cash - env.vault_state().cash, want.from_cash);
+    env.assert_invariant();
+}
+
+#[test]
+fn a_side_that_is_down_does_not_count_against_one_that_is_up() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let loser = env.trader(usdc(1_000.0));
+    let l = loser.kp.pubkey();
+    let pos = env.open(&l, &loser.kp, Side::Long, usdc(100.0), 10).unwrap();
+    env.close_at(&pos, &loser.kp, 95.0).unwrap();
+    // A long and a short of the same size at 95: at 96 the long is up as much as the short is down
+    let a = env.trader(usdc(1_000.0));
+    let ka = a.kp.pubkey();
+    env.open(&ka, &a.kp, Side::Long, usdc(10.0), 10).unwrap();
+    env.open(&ka, &a.kp, Side::Short, usdc(10.0), 10).unwrap();
+    env.next_epoch();
+    env.set_price(96.0);
+    let m: bust::Market = env.account(&env.market);
+    let long_up = math::side_pnl(Side::Long, 96_0000_0000, m.oi_long, m.long_units);
+    assert!(math::side_pnl(Side::Short, 96_0000_0000, m.oi_short, m.short_units) < 0);
+
+    let v = env.vault_state();
+    let above_mark = v.cash - env.dist_state().cash_mark;
+    env.distribute().unwrap();
+    let want = math::split(above_mark - long_up as u64, v.fees_accrued, DistParams::DEFAULT.keep_min_ppm, &DistParams::DEFAULT);
+    assert_eq!(v.cash - env.vault_state().cash, want.from_cash);
+}
+
+#[test]
+fn distribution_needs_every_market_and_a_fresh_price() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    env.next_epoch();
+    let price = env.price;
+    expect_err(env.distribute_with(&[]), "MarketsMismatch");
+    // A price older than the liquidation age is refused
+    let now = env.now;
+    env.set_price_full(100.0, 0.01, now - 60);
+    assert!(env.distribute_with(&[price]).is_err());
+    env.set_price(100.0);
+    env.distribute_with(&[price]).unwrap();
+}

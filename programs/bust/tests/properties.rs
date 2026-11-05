@@ -120,6 +120,16 @@ proptest! {
         prop_assert!(math::fee_of(amount, fee_ppm) <= amount);
     }
 
+    /// The one-step side PnL equals the sum over positions, give or take rounding
+    #[test]
+    fn side_pnl_matches_the_positions(side in side(), positions in prop::collection::vec((1u64..1_000_000_000_000, 1_000_000u64..1_000_000_000_000), 1..30), price in 1_000_000u64..1_000_000_000_000) {
+        let oi: u64 = positions.iter().map(|p| p.0).sum();
+        let units: u128 = positions.iter().map(|&(n, e)| math::pnl_units(n, e)).sum();
+        let each: i128 = positions.iter().map(|&(n, e)| math::raw_pnl(side, e, price, n)).sum();
+        let all = math::side_pnl(side, price, oi, units);
+        prop_assert!((all - each).abs() <= positions.len() as i128 * 2 + 2, "{all} vs {each}");
+    }
+
     // ---------- distribution math
 
     #[test]

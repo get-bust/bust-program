@@ -73,8 +73,10 @@ pub struct OrderCancelled {
 #[event]
 pub struct Distributed {
     pub epoch: u64,
-    /// Vault profit above the high-water mark
+    /// Vault profit above the high-water mark, less what open positions are up
     pub profit: u64,
+    /// Unrealised profit of open positions (before haircuts) held back from the profit
+    pub unrealized: u64,
     /// Share kept in the vault (ppm)
     pub keep_ppm: u32,
     /// Fees plus the distributed part of profit

@@ -243,6 +243,11 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     let new_oi = oi.checked_add(notional).ok_or(PerpError::MathOverflow)?;
     require!(new_oi <= cap, PerpError::OpenInterestCap);
     *oi = new_oi;
+    let units = match side {
+        Side::Long => &mut market.long_units,
+        Side::Short => &mut market.short_units,
+    };
+    *units = units.checked_add(math::pnl_units(notional, read.price)).ok_or(PerpError::MathOverflow)?;
     let vault = &mut ctx.accounts.vault;
     let total = match side {
         Side::Long => &mut vault.oi_long_total,
@@ -318,6 +323,11 @@ fn settle(
         Side::Short => &mut market.oi_short,
     };
     *oi = oi.saturating_sub(position.notional);
+    let units = match position.side {
+        Side::Long => &mut market.long_units,
+        Side::Short => &mut market.short_units,
+    };
+    *units = units.saturating_sub(math::pnl_units(position.notional, position.entry_price));
     let total = match position.side {
         Side::Long => &mut vault.oi_long_total,
         Side::Short => &mut vault.oi_short_total,
