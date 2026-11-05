@@ -16,18 +16,18 @@ pub struct PriceRead {
     /// 1e-8 scale
     pub price: u64,
     pub publish_time: i64,
+    /// Publish time of the update before this one on the same feed (signed with it)
+    pub prev_publish_time: i64,
 }
+
+/// A fill price is fixed by the order, not by when it is read: any age is fine
+const FILL_PRICE_ANY_AGE: u64 = i64::MAX as u64;
 
 /// Checks a Pyth price (age, signature count under partial verification, confidence) and rescales it to 1e-8
 #[allow(clippy::manual_range_contains)]
-pub fn read_price(update: &PriceUpdateV2, feed_id: &[u8; 32], params: &Params) -> Result<PriceRead> {
+pub fn read_price(update: &PriceUpdateV2, feed_id: &[u8; 32], params: &Params, max_age_sec: u64) -> Result<PriceRead> {
     let level = VerificationLevel::Partial { num_signatures: params.min_price_signatures };
-    let price = update.get_price_no_older_than_with_custom_verification_level(
-        &Clock::get()?,
-        params.max_price_age_sec,
-        feed_id,
-        level,
-    )?;
+    let price = update.get_price_no_older_than_with_custom_verification_level(&Clock::get()?, max_age_sec, feed_id, level)?;
     require!(price.price > 0, PerpError::InvalidPrice);
     let to_scale = |v: u128| -> Result<u128> {
         let shift = price.exponent - PRICE_EXPONENT;
@@ -42,14 +42,23 @@ pub fn read_price(update: &PriceUpdateV2, feed_id: &[u8; 32], params: &Params) -
     let conf = to_scale(price.conf as u128)?;
     require!(value > 0 && value <= u64::MAX as u128, PerpError::InvalidPrice);
     require!(conf * PPM <= value * params.max_conf_ppm as u128, PerpError::PriceConfidence);
-    Ok(PriceRead { price: value as u64, publish_time: price.publish_time })
+    Ok(PriceRead {
+        price: value as u64,
+        publish_time: price.publish_time,
+        prev_publish_time: update.price_message.prev_publish_time,
+    })
 }
 
-/// The fill price must be published AFTER the request and within max_fill_delay_sec of it.
-/// The user cannot pick a stale price, and the keeper cannot pick one outside the window.
-fn check_fill_window(read: &PriceRead, requested_at: i64, params: &Params) -> Result<()> {
-    require!(read.publish_time > requested_at, PerpError::PriceBeforeRequest);
-    require!(read.publish_time <= requested_at + params.max_fill_delay_sec, PerpError::PriceTooLate);
+/// An order fills at exactly one price: the first update on the feed published at or after its fill time
+/// T = requested_at + fill_delay_sec, i.e. publish_time ≥ T and prev_publish_time < T. Pyth signs prev_publish_time
+/// with each update, so the message is unique and cannot be forged. A user running their own keeper therefore cannot
+/// pick the best of several updates, and cannot skip a bad one either: any keeper can fetch the same message from
+/// Hermes later and fill with it. The delay keeps T past what the user could have seen when the request landed,
+/// even if the chain clock runs a little behind.
+fn check_fill_price(read: &PriceRead, requested_at: i64, params: &Params) -> Result<()> {
+    let fill_at = requested_at + params.fill_delay_sec;
+    require!(read.publish_time >= fill_at, PerpError::PriceBeforeRequest);
+    require!(read.prev_publish_time < fill_at, PerpError::NotTheFillPrice);
     Ok(())
 }
 
@@ -206,8 +215,8 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     let order = &ctx.accounts.order;
     require!(!config.paused, PerpError::Paused);
 
-    let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, params)?;
-    check_fill_window(&read, order.requested_at, params)?;
+    let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, params, FILL_PRICE_ANY_AGE)?;
+    check_fill_price(&read, order.requested_at, params)?;
     let (side, margin, leverage) = (order.side, order.margin, order.leverage);
     let notional = margin.checked_mul(leverage as u64).ok_or(PerpError::MathOverflow)?;
 
@@ -475,8 +484,8 @@ pub struct ExecuteClose<'info> {
 
 pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
     let params = ctx.accounts.config.params;
-    let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params)?;
-    check_fill_window(&read, ctx.accounts.order.requested_at, &params)?;
+    let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
+    check_fill_price(&read, ctx.accounts.order.requested_at, &params)?;
     let s = settle(
         &params,
         &mut ctx.accounts.vault,
@@ -531,8 +540,9 @@ pub struct CancelOrder<'info> {
     pub order: Account<'info, OrderRequest>,
 }
 
-/// Cancels an unfilled order and refunds the locked margin. Not before the timeout:
-/// otherwise a user could see the price and pull the order if they do not like it (a free option).
+/// Cancels an unfilled order and refunds the locked margin. Only after the timeout, and only meant for a Pyth outage:
+/// the fill price exists from requested_at + fill_delay_sec on and keepers fill with it, so an earlier cancel would let
+/// a user look at that price and walk away from it (a free option).
 pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let order = &ctx.accounts.order;
@@ -586,7 +596,7 @@ pub struct Liquidate<'info> {
 
 pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let params = ctx.accounts.config.params;
-    let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params)?;
+    let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, params.max_price_age_sec)?;
     let position = &ctx.accounts.position;
     require!(math::is_bust(position.side, read.price, position.bust_price), PerpError::NotLiquidatable);
     let s =

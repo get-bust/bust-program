@@ -29,9 +29,11 @@ pub struct Params {
     pub max_session_sec: i64,
     /// Minimum verified Wormhole signatures on a Pyth update (partial verification; Full always passes)
     pub min_price_signatures: u8,
-    /// An order fills with a price published at most this long after the second following the request
-    pub max_fill_delay_sec: i64,
-    /// An unfilled order can be cancelled and its margin refunded after this long
+    /// An order fills at the first Pyth update published at or after requested_at + fill_delay_sec: one message,
+    /// fixed when the order is requested, that neither the user nor the keeper can choose
+    pub fill_delay_sec: i64,
+    /// An order nobody filled can be cancelled and its margin refunded after this long (only matters if Pyth is down:
+    /// the fill price can be fetched from Hermes at any later time)
     pub order_timeout_sec: i64,
 }
 
@@ -54,8 +56,8 @@ impl Params {
         max_session_sec: 30 * 24 * 60 * 60,
         // Hermes VAAs carry 3 signatures as of 2026-10 (guardian set 1); all of them are verified
         min_price_signatures: 3,
-        max_fill_delay_sec: 5,
-        order_timeout_sec: 30,
+        fill_delay_sec: 2,
+        order_timeout_sec: 60,
     };
 
     pub fn validate(&self) -> bool {
@@ -73,8 +75,8 @@ impl Params {
             && self.max_price_age_sec > 0
             && self.max_session_sec > 0
             && self.min_price_signatures > 0
-            && self.max_fill_delay_sec > 0
-            && self.order_timeout_sec > self.max_fill_delay_sec
+            && self.fill_delay_sec > 0
+            && self.order_timeout_sec > self.fill_delay_sec
     }
 }
 
@@ -463,8 +465,8 @@ pub enum OrderKind {
     Close,
 }
 
-/// Two-step order: the user writes the request with a timestamp, a keeper fills it with a price
-/// published AFTER the request. Nobody gets to pick a stale price they already know.
+/// Two-step order: the user writes the request with a timestamp; anyone fills it at the one Pyth update that first
+/// reaches requested_at + fill_delay_sec. Nobody gets to pick the price, or to skip it.
 #[account]
 #[derive(InitSpace)]
 pub struct OrderRequest {

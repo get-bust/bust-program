@@ -19,7 +19,7 @@ fn a_fill_cannot_use_another_feeds_price() {
     let mut env = Env::new();
     let t = funded(&mut env);
     let order = env.request_open(&t.kp.pubkey(), &t.kp, Side::Long, usdc(10.0), 10).unwrap();
-    env.tick();
+    env.advance_to_fill();
     // A real, fresh Pyth update, but for another asset
     let other = Pubkey::new_unique();
     let now = env.now;
@@ -34,7 +34,7 @@ fn a_fill_cannot_use_a_price_account_pyth_does_not_own() {
     let mut env = Env::new();
     let t = funded(&mut env);
     let order = env.request_open(&t.kp.pubkey(), &t.kp, Side::Long, usdc(10.0), 10).unwrap();
-    env.tick();
+    env.advance_to_fill();
     // The same bytes Pyth would write, in an account the attacker owns
     let fake = Pubkey::new_unique();
     let now = env.now;
@@ -49,7 +49,7 @@ fn prices_in_other_exponents_are_rescaled() {
     let t = funded(&mut env);
     let owner = t.kp.pubkey();
     let order = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
-    env.tick();
+    env.advance_to_fill();
     // $100 at exponent -5
     let (price, now) = (env.price, env.now);
     env.write_price(price, FEED, 100_00000, -5, 100, now, pyth_solana_receiver_sdk::ID);
@@ -59,7 +59,7 @@ fn prices_in_other_exponents_are_rescaled() {
 
     // An exponent the program cannot represent is refused, not misread
     let order = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
-    env.tick();
+    env.advance_to_fill();
     let now = env.now;
     env.write_price(price, FEED, 1, 30, 0, now, pyth_solana_receiver_sdk::ID);
     expect_err(env.execute_open(&order).map(|_| ()), "InvalidPrice");
@@ -72,7 +72,7 @@ fn a_fill_must_use_the_orders_market() {
     let admin = env.admin.insecure_clone();
     env.add_market(&admin, 1, OTHER_FEED, ETH_MULT).unwrap();
     let order = env.request_open(&t.kp.pubkey(), &t.kp, Side::Long, usdc(10.0), 10).unwrap();
-    env.tick();
+    env.advance_to_fill();
     let price = env.price;
     expect_err(env.execute_open_with(&order, price, market_pda(1)).map(|_| ()), "ConstraintAddress");
 }
@@ -176,7 +176,7 @@ fn an_order_fills_once_and_a_filled_order_cannot_be_cancelled() {
     let t = funded(&mut env);
     let owner = t.kp.pubkey();
     let order = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
-    env.tick();
+    env.advance_to_fill();
     env.execute_open(&order).unwrap();
     assert!(env.svm.get_account(&order).is_none_or(|a| a.data.is_empty()), "the order account is closed");
     env.set_time(env.now + 60);

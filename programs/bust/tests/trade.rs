@@ -107,8 +107,8 @@ fn stale_or_uncertain_prices_are_rejected() {
     let owner = t.kp.pubkey();
 
     let order = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
-    env.set_time(env.now + 1);
-    // Older than 5 s
+    env.set_time(env.now + FILL_DELAY);
+    // Published before the fill time
     env.set_price_full(100.0, 0.01, env.now - 10);
     assert!(env.execute_open(&order).is_err());
     // Confidence of 1% > 0.2%
@@ -119,27 +119,51 @@ fn stale_or_uncertain_prices_are_rejected() {
 }
 
 #[test]
-fn fill_price_must_come_after_request() {
+fn an_order_fills_at_exactly_one_price() {
     let mut env = Env::new();
     env.seed(usdc(25_000.0));
     let t = env.trader(usdc(1_000.0));
     let owner = t.kp.pubkey();
-
-    // A price from the same second as the request (one the user could have seen) is rejected
     let order = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
-    let requested_at = env.now;
-    env.set_price(100.0);
+    let fill_at = env.now + FILL_DELAY;
+    let (price, mantissa) = (env.price, 100_0000_0000i64);
+    let pyth = pyth_solana_receiver_sdk::ID;
+
+    // Anything published before the fill time, including what the user saw when requesting
+    env.set_time(fill_at);
+    env.write_price_after(price, mantissa, fill_at - 1, fill_at - 2, pyth);
     expect_err(env.execute_open(&order).map(|_| ()), "PriceBeforeRequest");
+    // A later update in the fill second: the first one is the only fill price
+    env.write_price_after(price, mantissa, fill_at, fill_at, pyth);
+    expect_err(env.execute_open(&order).map(|_| ()), "NotTheFillPrice");
+    // Any update after that
+    env.write_price_after(price, mantissa, fill_at + 3, fill_at + 2, pyth);
+    expect_err(env.execute_open(&order).map(|_| ()), "NotTheFillPrice");
 
-    // The keeper cannot pick a price from long after the request (the window is 5 s)
-    env.set_time(requested_at + 6);
-    env.set_price(100.0);
-    expect_err(env.execute_open(&order).map(|_| ()), "PriceTooLate");
+    // The first update at or after the fill time, even if no update landed exactly in that second
+    env.write_price_after(price, 101_0000_0000, fill_at + 1, fill_at - 1, pyth);
+    let pos = env.execute_open(&order).unwrap();
+    let p: bust::Position = env.account(&pos);
+    assert_eq!(p.entry_price, 101_0000_0000);
+}
 
-    // Inside the window: 1–5 s after the request
-    env.set_time(requested_at + 3);
-    env.set_price(100.0);
-    env.execute_open(&order).unwrap();
+#[test]
+fn a_fill_price_can_be_used_long_after_it_was_published() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    let order = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
+    let fill_at = env.now + FILL_DELAY;
+    // A user who does not like the fill price cannot get out of it by not filling: the timeout is far away,
+    // and any keeper can still fill with that same message from Hermes
+    env.set_time(fill_at + 50);
+    let price = env.price;
+    env.write_price_after(price, 90_0000_0000, fill_at, fill_at - 1, pyth_solana_receiver_sdk::ID);
+    expect_err(env.cancel(&order), "OrderNotExpired");
+    let pos = env.execute_open(&order).unwrap();
+    let p: bust::Position = env.account(&pos);
+    assert_eq!(p.entry_price, 90_0000_0000);
 }
 
 #[test]
@@ -156,7 +180,7 @@ fn cancel_only_after_timeout_refunds_margin() {
 
     // No cancel before the timeout, so nobody can see the price and walk away
     expect_err(env.cancel(&order), "OrderNotExpired");
-    env.set_time(env.now + 31);
+    env.set_time(env.now + Params::DEFAULT.order_timeout_sec + 1);
     env.cancel(&order).unwrap();
     let u = env.user_state(&owner);
     assert_eq!((u.balance, u.reserved), (usdc(1_000.0), 0));
@@ -172,7 +196,7 @@ fn partial_verification_needs_enough_signatures() {
     let owner = t.kp.pubkey();
 
     let order = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
-    env.set_time(env.now + 1);
+    env.set_time(env.now + FILL_DELAY);
     env.level = VerificationLevel::Partial { num_signatures: 2 };
     env.set_price(100.0);
     assert!(env.execute_open(&order).is_err(), "2 signatures must be rejected");
@@ -192,7 +216,7 @@ fn close_order_must_match_its_position() {
     let b = env.open(&owner, &t.kp, Side::Short, usdc(10.0), 10).unwrap();
 
     let order = env.request_close(&a, &t.kp).unwrap();
-    env.tick();
+    env.advance_to_fill();
     let o: bust::OrderRequest = env.account(&order);
     let p: bust::Position = env.account(&b);
     let keeper = env.keeper.insecure_clone();

@@ -32,8 +32,8 @@ pub enum PerpError {
     ZeroAmount,
     #[msg("Price was published before the order request")]
     PriceBeforeRequest,
-    #[msg("Price was published too long after the order request")]
-    PriceTooLate,
+    #[msg("Price is not the first update at the order's fill time")]
+    NotTheFillPrice,
     #[msg("Order cannot be cancelled yet")]
     OrderNotExpired,
     #[msg("Order does not match the accounts")]

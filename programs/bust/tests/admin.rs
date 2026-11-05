@@ -44,7 +44,7 @@ fn config_rejects_invalid_params() {
         Params { win_fee_ppm: 1_000_000, ..Params::DEFAULT },
         Params { holdback_start_ppm: 600, holdback_end_ppm: 600, ..Params::DEFAULT },
         Params { oi_cap_ratio_ppm: 1_000_001, ..Params::DEFAULT },
-        Params { order_timeout_sec: 5, max_fill_delay_sec: 5, ..Params::DEFAULT },
+        Params { order_timeout_sec: 2, fill_delay_sec: 2, ..Params::DEFAULT },
         // a 5 bps buffer is the whole margin at 2000×
         Params { max_leverage: 2000, ..Params::DEFAULT },
     ] {
@@ -88,7 +88,7 @@ fn pause_stops_new_positions_only() {
 
     expect_err(env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).map(|_| ()), "Paused");
     // An order requested before the pause is not filled either
-    env.tick();
+    env.advance_to_fill();
     expect_err(env.execute_open(&pending).map(|_| ()), "Paused");
 
     // Closing and withdrawing still work

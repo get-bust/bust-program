@@ -24,6 +24,8 @@ pub use {
 };
 
 pub const NOW: i64 = 1_800_000_000;
+/// Orders fill at the first price published this long after the request
+pub const FILL_DELAY: i64 = Params::DEFAULT.fill_delay_sec;
 pub const FEED: [u8; 32] = [7u8; 32];
 pub const ETH_MULT: u64 = 483_979;
 
@@ -314,6 +316,25 @@ impl Env {
         self.write_price(account, FEED, mantissa, -8, (conf * 1e8).round() as u64, publish_time, pyth_solana_receiver_sdk::ID);
     }
 
+    /// A FEED update with an explicit prev_publish_time, to test which update is an order's fill price
+    pub fn write_price_after(
+        &mut self,
+        account: Pubkey,
+        mantissa: i64,
+        publish_time: i64,
+        prev_publish_time: i64,
+        owner: Pubkey,
+    ) {
+        self.write_price(account, FEED, mantissa, -8, (mantissa / 10_000) as u64, publish_time, owner);
+        let mut acc = self.svm.get_account(&account).unwrap();
+        let mut update = PriceUpdateV2::try_deserialize(&mut acc.data.as_slice()).unwrap();
+        update.price_message.prev_publish_time = prev_publish_time;
+        let mut data = Vec::new();
+        update.try_serialize(&mut data).unwrap();
+        acc.data = data;
+        self.svm.set_account(account, acc).unwrap();
+    }
+
     /// Writes any PriceUpdateV2: another feed, another exponent, or an account owned by someone other than Pyth
     #[allow(clippy::too_many_arguments)]
     pub fn write_price(
@@ -350,6 +371,13 @@ impl Env {
     pub fn set_price(&mut self, price: f64) {
         self.last_price = price;
         self.set_price_full(price, price * 0.0001, self.now);
+    }
+
+    /// Moves the clock to the fill time of an order requested now, and republishes the last price there
+    pub fn advance_to_fill(&mut self) {
+        self.set_time(self.now + FILL_DELAY);
+        let p = self.last_price;
+        self.set_price(p);
     }
 
     /// Moves the clock one second and republishes the last price at the new time
@@ -809,10 +837,10 @@ impl Env {
         Ok(position)
     }
 
-    /// Request, then fill with a price published one second later
+    /// Request, then fill at the order's fill price
     pub fn open(&mut self, owner: &Pubkey, signer: &Keypair, side: Side, margin: u64, leverage: u16) -> Result<Pubkey, String> {
         let order = self.request_open(owner, signer, side, margin, leverage)?;
-        self.tick();
+        self.advance_to_fill();
         self.execute_open(&order)
     }
 
@@ -864,10 +892,10 @@ impl Env {
         self.send(&[ix], &[&keeper])
     }
 
-    /// Close request, then the exit price is published one second later
+    /// Close request, then the exit price is the one published at the order's fill time
     pub fn close_at(&mut self, position: &Pubkey, signer: &Keypair, exit_price: f64) -> Result<(), String> {
         let order = self.request_close(position, signer)?;
-        self.set_time(self.now + 1);
+        self.set_time(self.now + FILL_DELAY);
         self.set_price(exit_price);
         self.execute_close(&order)
     }

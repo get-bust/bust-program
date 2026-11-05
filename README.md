@@ -113,31 +113,36 @@ address itself is the one to give.
 
 If a user could open at a price they put in the transaction, they could wait for a Pyth update they like, or
 trade on a move they already saw off chain. At high leverage that is free money taken from the vault. So every
-open and close takes two steps:
+open and close takes two steps, and the second step has exactly one possible price:
 
 ```mermaid
 sequenceDiagram
     participant U as User / session key
     participant P as bust program
-    participant K as Keeper
+    participant K as Keeper (anyone)
     participant H as Pyth (Hermes)
     U->>P: request_open(side, margin, leverage)
     Note over P: margin: balance → reserved<br/>OrderRequest stores requested_at
-    K->>H: signed price published after requested_at
+    K->>H: the first update at T = requested_at + 2 s
     K->>P: execute_open(order, price update)
-    Note over P: publish_time > requested_at<br/>publish_time ≤ requested_at + 5 s<br/>OI cap, bust price, open Position
+    Note over P: publish_time ≥ T and prev_publish_time < T<br/>OI cap, bust price, open Position
     U->>P: request_close(position)
     K->>P: execute_close(order, price update)
-    Note over P: same window, settle, close Position,<br/>update the user's EpochLoss
+    Note over P: same rule, settle, close Position,<br/>update the user's EpochLoss
 ```
 
-- The fill price must be published **after** the request second and at most `max_fill_delay_sec` (5 s) later.
-  Neither the user nor the keeper chooses it.
-- Prices come from Pyth `PriceUpdateV2` accounts. They must be at most 5 s old, carry at least 3 verified
-  Wormhole signatures under partial verification, and have a confidence interval within 0.2% of the price.
-- An order nobody fills can be cancelled after `order_timeout_sec` (30 s) and its margin comes back. Not
-  earlier: cancelling after seeing the next price would be a free option.
-- Anyone can be the keeper. A keeper decides only *when* an order is filled, inside the window.
+- **One fill price.** An order fills at the first Pyth update on its feed published at or after
+  `T = requested_at + fill_delay_sec` (2 s): `publish_time ≥ T` and `prev_publish_time < T`. Pyth signs
+  `prev_publish_time` into every update, so exactly one message qualifies and nobody can forge another.
+- **No choosing, no skipping.** Anyone can fill, including a user running their own keeper, but there is
+  nothing to choose between. Not filling does not help either: the price is fixed once `T` passes, Hermes
+  serves that same message for any past second, and any keeper can fill with it later.
+- **The delay** puts `T` past what the user could have seen when the request landed, with room for the chain
+  clock running a little behind real time. Keepers should watch for clock drift larger than that.
+- **Cancelling** is only for a Pyth outage: an order nobody filled can be cancelled after `order_timeout_sec`
+  (60 s) and its margin comes back.
+- Fill prices need at least 3 verified Wormhole signatures under partial verification and a confidence interval
+  within 0.2% of the price. Liquidations use the latest price instead, at most 5 s old.
 
 ### Session keys
 
@@ -345,7 +350,7 @@ Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change 
 | OI cap | 0.6 × net vault, per market and side |
 | Max price age / confidence | 5 s / 0.2% |
 | Min Pyth signatures | 3 |
-| Fill window / order timeout | 5 s / 30 s |
+| Fill delay / order timeout | 2 s / 60 s |
 | Max session | 30 days |
 | Epoch | 1 day |
 | Vault share of profit | 20% – 80%, by the highest daily average utilisation of the last 7 days |
