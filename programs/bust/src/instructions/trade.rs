@@ -79,18 +79,23 @@ fn require_fill_message(read: &PriceRead, fill_at: i64) -> Result<()> {
 /// cancelled is never anyone's choice:
 /// - it must come at most max_fill_gap_sec after T; a later one means Pyth was down, and filling at it would hand
 ///   the trader a price from long after they asked;
-/// - its confidence must be within the general bound and, as confidence / price × leverage, within
-///   max_conf_margin_ppm of the margin (at 1000× the margin covers 10 bps; the general 0.2% would allow twice that)
-fn fillable(read: &PriceRead, fill_at: i64, leverage: u16, params: &Params) -> bool {
+/// - its confidence must be within the general bound;
+/// - for an open, also within max_conf_margin_ppm of the margin as confidence / price × leverage (at 1000× the
+///   margin covers 10 bps; the general 0.2% would allow twice that). The point is not to open a position whose entry
+///   is noise next to its margin. A close does not take it: its price is fixed all the same and the uncertainty cuts
+///   both ways, and holding a close back in a volatile market would keep traders in when they most want out
+fn fillable(read: &PriceRead, fill_at: i64, open_leverage: Option<u16>, params: &Params) -> bool {
     read.publish_time - fill_at <= params.max_fill_gap_sec
         && conf_within(read, params.max_conf_ppm as u128)
-        && read.conf as u128 * PPM * leverage as u128 <= read.price as u128 * params.max_conf_margin_ppm as u128
+        && open_leverage.is_none_or(|leverage| {
+            read.conf as u128 * PPM * leverage as u128 <= read.price as u128 * params.max_conf_margin_ppm as u128
+        })
 }
 
-fn check_fill_price(read: &PriceRead, fill_at: i64, leverage: u16, params: &Params) -> Result<()> {
+fn check_fill_price(read: &PriceRead, fill_at: i64, open_leverage: Option<u16>, params: &Params) -> Result<()> {
     require_fill_message(read, fill_at)?;
     require!(read.publish_time - fill_at <= params.max_fill_gap_sec, PerpError::PythOutage);
-    require!(fillable(read, fill_at, leverage, params), PerpError::PriceConfidence);
+    require!(fillable(read, fill_at, open_leverage, params), PerpError::PriceConfidence);
     Ok(())
 }
 
@@ -264,7 +269,7 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     require!(!config.paused, PerpError::Paused);
 
     let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, params, FILL_PRICE_ANY_AGE)?;
-    check_fill_price(&read, order.fill_at, order.leverage, params)?;
+    check_fill_price(&read, order.fill_at, Some(order.leverage), params)?;
     let (side, margin, leverage) = (order.side, order.margin, order.leverage);
     let notional = margin.checked_mul(leverage as u64).ok_or(PerpError::MathOverflow)?;
 
@@ -562,7 +567,7 @@ pub struct ExecuteClose<'info> {
 pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
     let params = ctx.accounts.config.params;
     let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
-    check_fill_price(&read, ctx.accounts.order.fill_at, ctx.accounts.position.leverage, &params)?;
+    check_fill_price(&read, ctx.accounts.order.fill_at, None, &params)?;
     observe(&mut ctx.accounts.market, read.publish_time);
     let s = settle(
         &params,
@@ -620,8 +625,8 @@ pub struct CancelOrder<'info> {
     pub market: Account<'info, Market>,
     /// The order's fill message, as proof that it cannot fill the order
     pub price_update: Account<'info, PriceUpdateV2>,
-    /// CHECK: The position a close order would close (for its leverage), or whatever order.position holds for an
-    /// open order (the default key). A close order whose position is already gone has nothing to fill
+    /// CHECK: The position a close order would close, only to see whether it still exists, or whatever order.position
+    /// holds for an open order (the default key). A close order whose position is already gone has nothing to fill
     #[account(address = order.position)]
     pub position: UncheckedAccount<'info>,
 }
@@ -632,20 +637,14 @@ pub struct CancelOrder<'info> {
 pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
     let params = ctx.accounts.config.params;
     let order = &ctx.accounts.order;
-    let position = &ctx.accounts.position;
-    let leverage = match order.kind {
-        OrderKind::Open => Some(order.leverage),
-        // liquidated, or closed by another order, since this one was requested
-        OrderKind::Close if position.data_is_empty() => None,
-        OrderKind::Close => {
-            require_keys_eq!(*position.owner, crate::ID, PerpError::OrderMismatch);
-            Some(Position::try_deserialize(&mut &position.try_borrow_data()?[..])?.leverage)
-        }
-    };
-    if let Some(leverage) = leverage {
+    // A close order whose position was liquidated, or closed by another order, since it was requested has nothing
+    // to fill; any other order needs its fill message to show that it cannot fill
+    let gone = order.kind == OrderKind::Close && ctx.accounts.position.data_is_empty();
+    if !gone {
+        let open_leverage = (order.kind == OrderKind::Open).then_some(order.leverage);
         let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
         require_fill_message(&read, order.fill_at)?;
-        require!(!fillable(&read, order.fill_at, leverage, &params), PerpError::OrderFillable);
+        require!(!fillable(&read, order.fill_at, open_leverage, &params), PerpError::OrderFillable);
     }
     if order.kind == OrderKind::Open {
         let user = &mut ctx.accounts.user;

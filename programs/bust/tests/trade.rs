@@ -367,3 +367,22 @@ fn high_leverage_needs_a_tight_confidence_interval() {
     env.execute_open(&at_100).unwrap();
     env.assert_invariant();
 }
+
+#[test]
+fn a_close_fills_in_a_volatile_market_that_would_hold_an_open_back() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    let pos = env.open(&owner, &t.kp, Side::Long, usdc(10.0), 1000).unwrap();
+    // 3 bps of confidence: too uncertain to open at 1000×, still inside the general 0.2% for a close
+    let close = env.request_close(&pos, &t.kp).unwrap();
+    let open = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 1000).unwrap();
+    env.set_time(env.now + FILL_DELAY);
+    let now = env.now;
+    env.set_price_full(100.0, 0.03, now);
+    expect_err(env.execute_open(&open).map(|_| ()), "PriceConfidence");
+    expect_err(env.cancel(&close), "OrderFillable");
+    env.execute_close(&close).unwrap();
+    env.assert_invariant();
+}
