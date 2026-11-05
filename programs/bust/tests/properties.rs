@@ -130,6 +130,17 @@ proptest! {
         prop_assert!((all - each).abs() <= positions.len() as i128 * 2 + 2, "{all} vs {each}");
     }
 
+    /// The floors shrink as the debt grows past max_debt, never grow with it, and stay above zero for any debt the vault
+    /// could owe
+    #[test]
+    fn floors_shrink_with_debt_but_never_close(floor in 1u64..1_000_000_000_000_000, max_debt in 1u64..1_000_000_000_000_000, a in any::<u64>(), b in any::<u64>()) {
+        let p = Params { oi_floor: floor, oi_total_floor: floor, max_debt, ..Params::DEFAULT };
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        prop_assert!(p.floors(hi).0 <= p.floors(lo).0);
+        if lo <= max_debt { prop_assert_eq!(p.floors(lo).0, floor); }
+        if (hi as u128) < floor as u128 * max_debt as u128 { prop_assert!(p.floors(hi).0 > 0); }
+    }
+
     // ---------- distribution math
 
     #[test]

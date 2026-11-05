@@ -31,7 +31,8 @@ pub struct Params {
     pub oi_total_cap_ratio_ppm: u32,
     pub oi_total_floor: u64,
     /// The floors bound open interest at any moment, not the debt: positions that close and reopen can add to it.
-    /// Once queued debt passes this (USDC base units) the floors stop applying and the caps follow the vault alone
+    /// Past this much queued debt (USDC base units) the floors shrink in proportion, floor × max_debt / debt: trading
+    /// never stops, but the more the vault owes, the less new risk it takes, so the debt grows ever more slowly
     pub max_debt: u64,
     /// Deposit addresses are swept only from this balance up (USDC base units), so that dust cannot make keepers
     /// pay a transaction per base unit; smaller deposits wait until more arrives
@@ -70,7 +71,7 @@ impl Params {
         oi_floor: 25_000_000_000,
         oi_total_cap_ratio_ppm: 600_000,
         oi_total_floor: 50_000_000_000,
-        max_debt: 50_000_000_000,
+        max_debt: 15_000_000_000,
         min_sweep: 1_000_000,
         max_price_age_sec: 5,
         max_conf_ppm: 2_000,
@@ -82,13 +83,14 @@ impl Params {
         max_fill_gap_sec: 10,
     };
 
-    /// The floors under the per-market and total caps, given the queued debt
+    /// The floors under the per-market and total caps, given the queued debt: in full up to max_debt, then shrinking
+    /// as floor × max_debt / debt
     pub fn floors(&self, queue_total: u64) -> (u64, u64) {
-        if queue_total > self.max_debt {
-            (0, 0)
-        } else {
-            (self.oi_floor, self.oi_total_floor)
+        if queue_total <= self.max_debt {
+            return (self.oi_floor, self.oi_total_floor);
         }
+        let scale = |floor: u64| (floor as u128 * self.max_debt as u128 / queue_total as u128) as u64;
+        (scale(self.oi_floor), scale(self.oi_total_floor))
     }
 
     pub fn validate(&self) -> bool {

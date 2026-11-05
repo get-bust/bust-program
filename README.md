@@ -196,8 +196,11 @@ over all markets:      Σ OI on that side + new notional ≤ max(net vault × 0.
   settlement rules give it an edge, so it fills by being traded against; a cap tied only to the vault would
   keep a new vault empty and stop an indebted one from earning its way back.
 - **The floors bound exposure at any moment, not debt.** Positions that close and reopen can keep adding to the
-  queue. So once queued debt passes `max_debt`, the floors stop applying and the caps follow the vault alone,
-  which in debt means no new positions until the debt is back under the limit.
+  queue. So past `max_debt` (15,000 USDC) of queued debt the floors shrink in proportion, `floor × max_debt /
+  debt`: trading never stops, but the more the vault owes, the smaller the risk it takes on and the more slowly
+  the debt can grow. As the debt is paid down the floors grow back, and they are whole again under `max_debt`.
+- **Growing with the vault:** once 0.6 × the net vault passes a floor (about 42,000 USDC per market), the cap
+  follows the vault and the floor no longer matters; it is only there while the vault is small or in debt.
 - **How an indebted vault recovers:** losses on open positions and on new positions within the floors, LaunchLab
   fees and any seeded capital all become cash, and `harvest` hands it to the queue. A client should tell a user
   opening a position while the vault is in debt that a win will be queued.
@@ -409,7 +412,7 @@ Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change 
 | Holdback band | 0.75 – 6 bps |
 | Impact base / rate / reference notional | 10% / 15,000 / $100,000 |
 | OI cap | max(0.6 × net vault, floor) per market and side, and over all markets per side |
-| OI floors | 25,000 USDC per market and side, 50,000 USDC over all markets, off while debt is over 50,000 USDC (to be set by stress test) |
+| OI floors | 25,000 USDC per market and side, 50,000 USDC over all markets; past 15,000 USDC of debt, × 15,000 / debt |
 | Minimum deposit sweep | 1 USDC |
 | Max price age / confidence | 5 s / 0.2%, and on fills at most 25% of the margin's move (2.5 bps at 1000×) |
 | Min Pyth signatures | 3 |

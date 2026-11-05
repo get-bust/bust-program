@@ -105,7 +105,7 @@ fn closing_frees_the_total() {
 }
 
 #[test]
-fn past_the_debt_limit_the_floors_stop() {
+fn past_the_debt_limit_the_floors_shrink_but_trading_goes_on() {
     let params = Params { oi_floor: usdc(1_000.0), oi_total_floor: usdc(2_000.0), max_debt: usdc(10.0), ..Params::DEFAULT };
     let mut env = Env::with_params(params);
     env.seed(usdc(100.0));
@@ -113,16 +113,26 @@ fn past_the_debt_limit_the_floors_stop() {
     let w = winner.kp.pubkey();
     let pos = env.open(&w, &winner.kp, Side::Long, usdc(30.0), 2).unwrap();
     env.close_at(&pos, &winner.kp, 400.0).unwrap();
-    assert!(env.vault_state().queue_total > usdc(10.0), "~60 USDC queued, past the 10 USDC limit");
+    let debt = env.vault_state().queue_total;
+    assert!(debt > usdc(50.0), "~60 USDC queued, past the 10 USDC limit");
 
-    // In debt beyond the limit: no floor, and the vault itself has nothing to back a position
+    // The floor is now 1,000 × 10 / debt (~160): smaller positions still open, the full floor does not
+    let (floor, _) = params.floors(debt);
+    assert!(floor > usdc(100.0) && floor < usdc(200.0), "floor {floor}");
     env.set_price(100.0);
     let t = env.trader(usdc(1_000.0));
     let o = t.kp.pubkey();
-    expect_err(env.open(&o, &t.kp, Side::Long, usdc(10.0), 2).map(|_| ()), "OpenInterestCap");
+    expect_err(env.open(&o, &t.kp, Side::Long, usdc(100.0), 2).map(|_| ()), "OpenInterestCap");
+    let small = env.open(&o, &t.kp, Side::Long, usdc(50.0), 2).unwrap();
+    // Its loss pays the queue down, and the floor grows back with it
+    env.close_at(&small, &t.kp, 90.0).unwrap();
+    env.harvest().unwrap();
+    assert!(env.vault_state().queue_total < debt);
+    assert!(params.floors(env.vault_state().queue_total).0 > floor);
 
-    // Once the debt is paid back under the limit, the floor applies again
+    // Once the debt is back under the limit, the floor is whole again
     env.seed(usdc(1_000.0));
     env.harvest_and_claim(&[w]);
-    env.open(&o, &t.kp, Side::Long, usdc(10.0), 2).unwrap();
+    env.set_price(100.0);
+    env.open(&o, &t.kp, Side::Long, usdc(400.0), 2).unwrap();
 }
