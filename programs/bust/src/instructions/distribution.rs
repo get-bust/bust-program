@@ -139,14 +139,17 @@ pub fn handle_distribute(ctx: Context<Distribute>) -> Result<()> {
     let keep = d.peak_util(today).clamp(d.params.keep_min_ppm, d.params.keep_max_ppm);
     let mut s = math::split(profit, vault.fees_accrued, keep, &d.params);
 
-    // The staker share streams over one epoch; with nobody staked it goes to the burn instead of sitting idle
+    // The staker share streams over one epoch, together with whatever streamed while nobody was staked (that USDC
+    // is already in the staker bucket). With nobody staked now, both go to the burn instead of sitting idle
     let pool = &mut ctx.accounts.stake_pool;
     pool.update(now).ok_or(PerpError::MathOverflow)?;
+    let orphaned = pool.take_orphaned();
     if pool.total_staked == 0 {
-        s.burn += s.staker;
+        s.burn += s.staker + orphaned;
         s.staker = 0;
-    } else if s.staker > 0 {
-        pool.notify(s.staker, now, d.params.epoch_sec).ok_or(PerpError::MathOverflow)?;
+        d.staker_usdc = d.staker_usdc.checked_sub(orphaned).ok_or(PerpError::MathOverflow)?;
+    } else if s.staker + orphaned > 0 {
+        pool.notify(s.staker + orphaned, now, d.params.epoch_sec).ok_or(PerpError::MathOverflow)?;
     }
 
     vault.cash -= s.from_cash;

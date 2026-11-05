@@ -249,8 +249,9 @@ burn 40% · stakers 30% · xBUST 15% · developer 15% (rounding remainder to the
 
 Each distribution hands the staker share to the stake pool, which streams it second by second over the next
 epoch (Synthetix StakingRewards). A staker earns in proportion to their stake for the time they were staked,
-so staking just before a distribution and leaving after it earns almost nothing. With nobody staked, the share
-goes to the burn instead.
+so staking just before a distribution and leaving after it earns almost nothing. Reward that streams while
+nobody is staked is not lost: it is added to the next distribution's stream. If nobody is staked at a
+distribution, the share and anything orphaned go to the burn instead.
 
 `request_unstake` stops rewards at once and releases the $BUST after the pool's unstake period. Rewards are
 paid in USDC from the vault token account and can never exceed what was set aside for stakers.

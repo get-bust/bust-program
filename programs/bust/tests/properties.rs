@@ -223,6 +223,7 @@ proptest! {
             unstake_sec: 1,
             bump: 0,
             tokens_bump: 0,
+            orphaned: 0,
         };
         let mut accounts: Vec<StakeAccount> = (0..4)
             .map(|_| StakeAccount { owner: Default::default(), staked: 0, reward_per_token_paid: 0, rewards: 0, pending_unstake: 0, unstake_at: 0, bump: 0 })
@@ -245,10 +246,13 @@ proptest! {
                 }
                 Op::Notify(a) => {
                     pool.update(now).unwrap();
-                    // as in distribute: with nobody staked the share is burned, not streamed
+                    // as in distribute: orphaned reward is streamed again, or burned with the new share if nobody is staked
+                    let orphaned = pool.take_orphaned() as u128;
                     if pool.total_staked > 0 {
-                        pool.notify(a, now, epoch).unwrap();
+                        pool.notify(a + orphaned as u64, now, epoch).unwrap();
                         funded += a as u128;
+                    } else {
+                        funded -= orphaned;
                     }
                 }
                 Op::Wait(dt) => now += dt,
@@ -261,6 +265,16 @@ proptest! {
             let owed: u128 = accounts.iter().map(|a| a.rewards as u128).sum();
             prop_assert!(paid + owed <= funded, "paid {paid} + owed {owed} > funded {funded}");
         }
-        let _ = SCALE;
+        // Nothing gets stuck: once the stream ends, everything funded is earned, orphaned or lost to rounding
+        now += 2 * epoch;
+        pool.update(now).unwrap();
+        for a in accounts.iter_mut() {
+            a.settle(&pool).unwrap();
+        }
+        let earned: u128 = paid + accounts.iter().map(|a| a.rewards as u128).sum::<u128>();
+        let orphaned = pool.orphaned / SCALE;
+        prop_assert!(earned + orphaned <= funded);
+        // each notify, update and settle rounds down by at most one unit per staker
+        prop_assert!(funded - earned - orphaned <= 400, "stuck {} of {funded}", funded - earned - orphaned);
     }
 }

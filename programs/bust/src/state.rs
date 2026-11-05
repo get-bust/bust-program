@@ -220,19 +220,31 @@ pub struct StakePool {
     pub unstake_sec: i64,
     pub bump: u8,
     pub tokens_bump: u8,
+    /// Reward that streamed while nobody was staked (× SCALE). It goes back into the next distribution's stream
+    pub orphaned: u128,
 }
 
 impl StakePool {
-    /// Writes the reward streamed so far into reward_per_token
+    /// Writes the reward streamed so far into reward_per_token, or into `orphaned` while nobody is staked
     pub fn update(&mut self, now: i64) -> Option<()> {
         let until = now.min(self.period_finish);
-        if self.total_staked > 0 && until > self.last_update {
-            let elapsed = (until - self.last_update) as u128;
-            let add = elapsed.checked_mul(self.reward_rate)? / self.total_staked as u128;
-            self.reward_per_token = self.reward_per_token.checked_add(add)?;
+        if until > self.last_update {
+            let streamed = ((until - self.last_update) as u128).checked_mul(self.reward_rate)?;
+            if self.total_staked > 0 {
+                self.reward_per_token = self.reward_per_token.checked_add(streamed / self.total_staked as u128)?;
+            } else {
+                self.orphaned = self.orphaned.checked_add(streamed)?;
+            }
         }
         self.last_update = now.max(self.last_update);
         Some(())
+    }
+
+    /// Whole USDC base units of the orphaned reward, removed from it; the sub-unit remainder stays
+    pub fn take_orphaned(&mut self) -> u64 {
+        let units = self.orphaned / crate::constants::SCALE;
+        self.orphaned -= units * crate::constants::SCALE;
+        units as u64
     }
 
     /// Spreads a new reward (plus what is still streaming) over the next `duration` seconds. Call update first

@@ -45,6 +45,7 @@ pub fn handle_init_stake_pool(ctx: Context<InitStakePool>, unstake_sec: i64) -> 
         unstake_sec,
         bump: ctx.bumps.stake_pool,
         tokens_bump: ctx.bumps.stake_tokens,
+        orphaned: 0,
     });
     Ok(())
 }
