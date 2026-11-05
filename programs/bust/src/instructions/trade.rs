@@ -26,8 +26,20 @@ pub struct PriceRead {
 const FILL_PRICE_ANY_AGE: u64 = i64::MAX as u64;
 
 /// Checks a Pyth price (age, signature count under partial verification, confidence) and rescales it to 1e-8
-#[allow(clippy::manual_range_contains)]
 pub fn read_price(update: &PriceUpdateV2, feed_id: &[u8; 32], params: &Params, max_age_sec: u64) -> Result<PriceRead> {
+    let read = read_unchecked_conf(update, feed_id, params, max_age_sec)?;
+    require!(conf_within(&read, params.max_conf_ppm as u128), PerpError::PriceConfidence);
+    Ok(read)
+}
+
+/// confidence / price within `ppm`
+fn conf_within(read: &PriceRead, ppm: u128) -> bool {
+    read.conf as u128 * PPM <= read.price as u128 * ppm
+}
+
+/// read_price without the confidence bound, for fills and cancels, which apply their own
+#[allow(clippy::manual_range_contains)]
+fn read_unchecked_conf(update: &PriceUpdateV2, feed_id: &[u8; 32], params: &Params, max_age_sec: u64) -> Result<PriceRead> {
     let level = VerificationLevel::Partial { num_signatures: params.min_price_signatures };
     let price = update.get_price_no_older_than_with_custom_verification_level(&Clock::get()?, max_age_sec, feed_id, level)?;
     require!(price.price > 0, PerpError::InvalidPrice);
@@ -43,7 +55,6 @@ pub fn read_price(update: &PriceUpdateV2, feed_id: &[u8; 32], params: &Params, m
     let value = to_scale(price.price as u128)?;
     let conf = to_scale(price.conf as u128)?;
     require!(value > 0 && value <= u64::MAX as u128, PerpError::InvalidPrice);
-    require!(conf * PPM <= value * params.max_conf_ppm as u128, PerpError::PriceConfidence);
     Ok(PriceRead {
         price: value as u64,
         publish_time: price.publish_time,
@@ -53,21 +64,33 @@ pub fn read_price(update: &PriceUpdateV2, feed_id: &[u8; 32], params: &Params, m
 }
 
 /// An order fills at exactly one price: the first update on the feed published at or after its fill time
-/// T = order.fill_at, i.e. publish_time ≥ T and prev_publish_time < T. Pyth signs prev_publish_time
-/// with each update, so the message is unique and cannot be forged. A user running their own keeper therefore cannot
-/// pick the best of several updates, and cannot skip a bad one either: any keeper can fetch the same message from
-/// Hermes later and fill with it. T is set at request from the later of the chain clock and the newest price the
-/// market has seen, plus a delay, so it lies past anything the user could have seen even if the chain clock lags.
-///
-/// The price's uncertainty must also be small next to what the margin covers: confidence / price × leverage at most
-/// max_conf_margin_ppm. At 1000× the margin covers a 10 bps move, and the general 0.2% bound would allow twice that.
-fn check_fill_price(read: &PriceRead, fill_at: i64, leverage: u16, params: &Params) -> Result<()> {
+/// T = order.fill_at, i.e. publish_time ≥ T and prev_publish_time < T. Pyth signs prev_publish_time with each update,
+/// so the message is unique and cannot be forged. A user running their own keeper therefore cannot pick the best of
+/// several updates, and cannot skip a bad one either: any keeper can fetch the same message from Hermes later and
+/// fill with it. T is set at request from the later of the chain clock and the newest price the market has seen,
+/// plus a delay, so it lies past anything the user could have seen even if the chain clock lags.
+fn require_fill_message(read: &PriceRead, fill_at: i64) -> Result<()> {
     require!(read.publish_time >= fill_at, PerpError::PriceBeforeRequest);
     require!(read.prev_publish_time < fill_at, PerpError::NotTheFillPrice);
-    require!(
-        read.conf as u128 * PPM * leverage as u128 <= read.price as u128 * params.max_conf_margin_ppm as u128,
-        PerpError::PriceConfidence
-    );
+    Ok(())
+}
+
+/// Whether the order's fill message can fill it. Decided by the message alone, so whether the order fills or can be
+/// cancelled is never anyone's choice:
+/// - it must come at most max_fill_gap_sec after T; a later one means Pyth was down, and filling at it would hand
+///   the trader a price from long after they asked;
+/// - its confidence must be within the general bound and, as confidence / price × leverage, within
+///   max_conf_margin_ppm of the margin (at 1000× the margin covers 10 bps; the general 0.2% would allow twice that)
+fn fillable(read: &PriceRead, fill_at: i64, leverage: u16, params: &Params) -> bool {
+    read.publish_time - fill_at <= params.max_fill_gap_sec
+        && conf_within(read, params.max_conf_ppm as u128)
+        && read.conf as u128 * PPM * leverage as u128 <= read.price as u128 * params.max_conf_margin_ppm as u128
+}
+
+fn check_fill_price(read: &PriceRead, fill_at: i64, leverage: u16, params: &Params) -> Result<()> {
+    require_fill_message(read, fill_at)?;
+    require!(read.publish_time - fill_at <= params.max_fill_gap_sec, PerpError::PythOutage);
+    require!(fillable(read, fill_at, leverage, params), PerpError::PriceConfidence);
     Ok(())
 }
 
@@ -240,7 +263,7 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     let order = &ctx.accounts.order;
     require!(!config.paused, PerpError::Paused);
 
-    let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, params, FILL_PRICE_ANY_AGE)?;
+    let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, params, FILL_PRICE_ANY_AGE)?;
     check_fill_price(&read, order.fill_at, order.leverage, params)?;
     let (side, margin, leverage) = (order.side, order.margin, order.leverage);
     let notional = margin.checked_mul(leverage as u64).ok_or(PerpError::MathOverflow)?;
@@ -537,7 +560,7 @@ pub struct ExecuteClose<'info> {
 
 pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
     let params = ctx.accounts.config.params;
-    let read = read_price(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
+    let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
     check_fill_price(&read, ctx.accounts.order.fill_at, ctx.accounts.position.leverage, &params)?;
     observe(&mut ctx.accounts.market, read.publish_time);
     let s = settle(
@@ -592,15 +615,37 @@ pub struct CancelOrder<'info> {
         bump = order.bump,
     )]
     pub order: Account<'info, OrderRequest>,
+    #[account(address = order.market)]
+    pub market: Account<'info, Market>,
+    /// The order's fill message, as proof that it cannot fill the order
+    pub price_update: Account<'info, PriceUpdateV2>,
+    /// CHECK: The position a close order would close (for its leverage), or whatever order.position holds for an
+    /// open order (the default key). A close order whose position is already gone has nothing to fill
+    #[account(address = order.position)]
+    pub position: UncheckedAccount<'info>,
 }
 
-/// Cancels an unfilled order and refunds the locked margin. Only after the timeout, and only meant for a Pyth outage:
-/// the fill price exists from requested_at + fill_delay_sec on and keepers fill with it, so an earlier cancel would let
-/// a user look at that price and walk away from it (a free option).
+/// Cancels an order whose fill message cannot fill it: it came more than max_fill_gap_sec after the fill time (a Pyth
+/// outage) or its confidence is too wide; or a close order whose position no longer exists. Every other order can only
+/// be filled, so cancelling is never a way out of a fill price the user does not like. An open order's margin comes back.
 pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
-    let now = Clock::get()?.unix_timestamp;
+    let params = ctx.accounts.config.params;
     let order = &ctx.accounts.order;
-    require!(now > order.requested_at + ctx.accounts.config.params.order_timeout_sec, PerpError::OrderNotExpired);
+    let position = &ctx.accounts.position;
+    let leverage = match order.kind {
+        OrderKind::Open => Some(order.leverage),
+        // liquidated, or closed by another order, since this one was requested
+        OrderKind::Close if position.data_is_empty() => None,
+        OrderKind::Close => {
+            require_keys_eq!(*position.owner, crate::ID, PerpError::OrderMismatch);
+            Some(Position::try_deserialize(&mut &position.try_borrow_data()?[..])?.leverage)
+        }
+    };
+    if let Some(leverage) = leverage {
+        let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
+        require_fill_message(&read, order.fill_at)?;
+        require!(!fillable(&read, order.fill_at, leverage, &params), PerpError::OrderFillable);
+    }
     if order.kind == OrderKind::Open {
         let user = &mut ctx.accounts.user;
         user.reserved = user.reserved.checked_sub(order.margin).ok_or(PerpError::MathOverflow)?;

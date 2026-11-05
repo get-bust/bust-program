@@ -42,9 +42,9 @@ pub struct Params {
     /// An order fills at the first Pyth update published at or after its fill time, max(now, the market's last
     /// publish time) + fill_delay_sec: one message, fixed when the order is requested, that nobody can choose
     pub fill_delay_sec: i64,
-    /// An order nobody filled can be cancelled and its margin refunded after this long (only matters if Pyth is down:
-    /// the fill price can be fetched from Hermes at any later time)
-    pub order_timeout_sec: i64,
+    /// The fill message must come at most this long after the fill time. A later one means Pyth was down: such an
+    /// order can only be cancelled, with that message as proof
+    pub max_fill_gap_sec: i64,
 }
 
 impl Params {
@@ -71,7 +71,7 @@ impl Params {
         // Hermes VAAs carry 3 signatures as of 2026-10 (guardian set 1); all of them are verified
         min_price_signatures: 3,
         fill_delay_sec: 2,
-        order_timeout_sec: 60,
+        max_fill_gap_sec: 10,
     };
 
     pub fn validate(&self) -> bool {
@@ -92,7 +92,7 @@ impl Params {
             && self.max_session_sec > 0
             && self.min_price_signatures > 0
             && self.fill_delay_sec > 0
-            && self.order_timeout_sec > self.fill_delay_sec
+            && self.max_fill_gap_sec > 0
     }
 }
 

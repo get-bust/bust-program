@@ -45,7 +45,7 @@ fn config_rejects_invalid_params() {
         Params { holdback_start_ppm: 600, holdback_end_ppm: 600, ..Params::DEFAULT },
         Params { oi_cap_ratio_ppm: 1_000_001, ..Params::DEFAULT },
         Params { oi_total_cap_ratio_ppm: 1_000_001, ..Params::DEFAULT },
-        Params { order_timeout_sec: 2, fill_delay_sec: 2, ..Params::DEFAULT },
+        Params { max_fill_gap_sec: 0, ..Params::DEFAULT },
         // a 5 bps buffer is the whole margin at 2000×
         Params { max_leverage: 2000, ..Params::DEFAULT },
     ] {

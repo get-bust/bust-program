@@ -915,6 +915,7 @@ impl Env {
         self.execute_close(&order)
     }
 
+    /// Cancels with the price account as the proof that the order's fill message cannot fill it
     pub fn cancel(&mut self, order: &Pubkey) -> Result<(), String> {
         let o: bust::OrderRequest = self.account(order);
         let caller = self.keeper.insecure_clone();
@@ -927,6 +928,9 @@ impl Env {
                 rent_payer: o.rent_payer,
                 user: user_pda(&o.owner),
                 order: *order,
+                market: o.market,
+                price_update: self.price,
+                position: o.position,
             }
             .to_account_metas(None),
         );

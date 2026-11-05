@@ -34,8 +34,8 @@ pub enum PerpError {
     PriceBeforeRequest,
     #[msg("Price is not the first update at the order's fill time")]
     NotTheFillPrice,
-    #[msg("Order cannot be cancelled yet")]
-    OrderNotExpired,
+    #[msg("The order's fill message can fill it, so it cannot be cancelled")]
+    OrderFillable,
     #[msg("Order does not match the accounts")]
     OrderMismatch,
     #[msg("Epoch has not ended yet")]
@@ -62,4 +62,6 @@ pub enum PerpError {
     MarketsMismatch,
     #[msg("Price is older than one this market or position has already used")]
     PriceTooOld,
+    #[msg("The fill message came after a Pyth outage: the order can only be cancelled")]
+    PythOutage,
 }

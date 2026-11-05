@@ -202,7 +202,7 @@ fn an_order_fills_once_and_a_filled_order_cannot_be_cancelled() {
         .to_account_metas(None),
     );
     assert!(env.send(&[fill], &[&keeper]).is_err());
-    // Cancelling it after the timeout would refund margin that is already in a position
+    // Cancelling it would refund margin that is already in a position
     let cancel = Instruction::new_with_bytes(
         bust::id(),
         &bust::instruction::CancelOrder {}.data(),
@@ -212,6 +212,9 @@ fn an_order_fills_once_and_a_filled_order_cannot_be_cancelled() {
             rent_payer: owner,
             user: user_pda(&owner),
             order,
+            market: env.market,
+            price_update: env.price,
+            position: Pubkey::default(),
         }
         .to_account_metas(None),
     );

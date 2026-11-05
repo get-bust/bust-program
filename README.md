@@ -142,8 +142,11 @@ sequenceDiagram
   permissionless `observe_price`, which keepers call every few seconds, and that value never moves back. So `T`
   follows the Pyth timeline: even if the chain clock lags real time, the fill price is one nobody had seen when
   the request landed.
-- **Cancelling** is only for a Pyth outage: an order nobody filled can be cancelled after `order_timeout_sec`
-  (60 s) and its margin comes back.
+- **Cancelling is decided by the fill message too.** An order can be cancelled only with its fill message as
+  proof that it cannot fill the order: it came more than `max_fill_gap_sec` (10 s) after `T`, meaning Pyth was
+  down, or its confidence is too wide (below). Otherwise the order can only be filled. Whether an order fills or
+  cancels is never a choice, so waiting for nobody to fill and cancelling is not a way out of a bad price. A
+  close order whose position was liquidated in the meantime cancels without a price.
 - Fill prices need at least 3 verified Wormhole signatures under partial verification and a confidence interval
   within 0.2% of the price, and within a quarter of what the margin covers: `conf / price × leverage ≤ 25%`.
   At 1000× the margin covers a 10 bps move, so the fill price may carry at most 2.5 bps of uncertainty.
@@ -403,7 +406,7 @@ Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change 
 | OI floors | 25,000 USDC per market and side, 50,000 USDC over all markets (to be set by stress test) |
 | Max price age / confidence | 5 s / 0.2%, and on fills at most 25% of the margin's move (2.5 bps at 1000×) |
 | Min Pyth signatures | 3 |
-| Fill delay / order timeout | 2 s / 60 s |
+| Fill delay / largest gap before a fill message counts as an outage | 2 s / 10 s |
 | Max session | 30 days |
 | Epoch | 1 day |
 | Vault share of profit | 20% – 80%, by the highest daily average utilisation of the last 7 days |

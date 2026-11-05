@@ -155,37 +155,79 @@ fn a_fill_price_can_be_used_long_after_it_was_published() {
     let owner = t.kp.pubkey();
     let order = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
     let fill_at = env.now + FILL_DELAY;
-    // A user who does not like the fill price cannot get out of it by not filling: the timeout is far away,
-    // and any keeper can still fill with that same message from Hermes
-    env.set_time(fill_at + 50);
+    // A user who does not like the fill price cannot get out of it: it cannot be cancelled, however long nobody
+    // fills it, and any keeper can still fill with that same message from Hermes
+    env.set_time(fill_at + 600);
     let price = env.price;
     env.write_price_after(price, 90_0000_0000, fill_at, fill_at - 1, pyth_solana_receiver_sdk::ID);
-    expect_err(env.cancel(&order), "OrderNotExpired");
+    expect_err(env.cancel(&order), "OrderFillable");
     let pos = env.execute_open(&order).unwrap();
     let p: bust::Position = env.account(&pos);
     assert_eq!(p.entry_price, 90_0000_0000);
 }
 
 #[test]
-fn cancel_only_after_timeout_refunds_margin() {
+fn only_a_pyth_outage_lets_an_order_be_cancelled() {
     let mut env = Env::new();
     env.seed(usdc(25_000.0));
     let t = env.trader(usdc(1_000.0));
     let owner = t.kp.pubkey();
-
+    let pyth = pyth_solana_receiver_sdk::ID;
     let order = env.request_open(&owner, &t.kp, Side::Long, usdc(100.0), 10).unwrap();
+    let fill_at = env.now + FILL_DELAY;
     let u = env.user_state(&owner);
     assert_eq!((u.balance, u.reserved), (usdc(900.0), usdc(100.0)));
-    env.assert_invariant();
+    let price = env.price;
+    env.set_time(fill_at + 600);
 
-    // No cancel before the timeout, so nobody can see the price and walk away
-    expect_err(env.cancel(&order), "OrderNotExpired");
-    env.set_time(env.now + Params::DEFAULT.order_timeout_sec + 1);
+    // A fill message within the gap fills, and only fills
+    env.write_price_after(price, 100_0000_0000, fill_at + 10, fill_at - 1, pyth);
+    expect_err(env.cancel(&order), "OrderFillable");
+    // A later message is not the fill message at all
+    env.write_price_after(price, 100_0000_0000, fill_at + 30, fill_at + 20, pyth);
+    expect_err(env.cancel(&order), "NotTheFillPrice");
+
+    // Pyth was down: the first update after the fill time came 11 s late. It cannot fill the order; it cancels it
+    env.write_price_after(price, 100_0000_0000, fill_at + 11, fill_at - 5, pyth);
+    expect_err(env.execute_open(&order).map(|_| ()), "PythOutage");
     env.cancel(&order).unwrap();
     let u = env.user_state(&owner);
     assert_eq!((u.balance, u.reserved), (usdc(1_000.0), 0));
     env.assert_invariant();
     assert!(env.svm.get_account(&order).is_none_or(|a| a.lamports == 0), "order closed");
+}
+
+#[test]
+fn a_fill_message_too_uncertain_to_fill_cancels_the_order() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    let order = env.request_open(&owner, &t.kp, Side::Long, usdc(10.0), 1000).unwrap();
+    env.set_time(env.now + FILL_DELAY);
+    let now = env.now;
+    env.set_price_full(100.0, 0.03, now); // 3 bps: too wide for 1000×
+    expect_err(env.execute_open(&order).map(|_| ()), "PriceConfidence");
+    env.cancel(&order).unwrap();
+    assert_eq!(env.user_state(&owner).reserved, 0);
+}
+
+#[test]
+fn a_close_order_whose_position_is_gone_can_be_cancelled() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    let pos = env.open(&owner, &t.kp, Side::Long, usdc(10.0), 100).unwrap();
+    let close = env.request_close(&pos, &t.kp).unwrap();
+    // Liquidated before the close fills
+    env.set_time(env.now + 1);
+    env.set_price(98.0);
+    env.liquidate(&pos).unwrap();
+    // Nothing is left to close, so the order cancels without a price
+    env.cancel(&close).unwrap();
+    assert!(env.svm.get_account(&close).is_none_or(|a| a.lamports == 0));
+    env.assert_invariant();
 }
 
 #[test]
