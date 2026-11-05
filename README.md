@@ -16,6 +16,7 @@ profit shared between $BUST stakers, a buyback, and the traders who lost.
 - [$BUST staking](#bust-staking)
 - [xBUST](#xbust)
 - [LaunchLab platform fees](#launchlab-platform-fees)
+- [Economics](#economics)
 - [Ledger invariants](#ledger-invariants)
 - [Trust model](#trust-model)
 - [Parameters](#parameters)
@@ -140,17 +141,24 @@ sequenceDiagram
   serves that same message for any past second, and any keeper can fill with it later.
 - **The fill time** is set at request as `T = max(chain clock, market.last_publish_time) + fill_delay_sec`
   (2 s). Each market keeps the newest Pyth publish time it has seen, from fills, liquidations and the
-  permissionless `observe_price`, which keepers call every few seconds, and that value never moves back. So `T`
-  follows the Pyth timeline: even if the chain clock lags real time, the fill price is one nobody had seen when
-  the request landed.
+  permissionless `observe_price`, and that value never moves back. So `T` follows the Pyth timeline: even if the
+  chain clock lags real time, the fill price is one nobody had seen when the request landed.
+- **That holds as long as `fill_delay_sec` is longer than how far `last_publish_time` can trail real time.**
+  The relayer puts an `observe_price` with the latest Hermes update in the same transaction as every request it
+  sends, so for those `last_publish_time` is current; and keepers call `observe_price` every second for every
+  market, so for a request sent some other way it trails by about a second plus the time to land. A deployment
+  that observes less often needs a longer `fill_delay_sec`.
 - **Cancelling is decided by the fill message too.** An order can be cancelled only with its fill message as
   proof that it cannot fill the order: it came more than `max_fill_gap_sec` (10 s) after `T`, meaning Pyth was
   down, or its confidence is too wide (below). Otherwise the order can only be filled. Whether an order fills or
   cancels is never a choice, so waiting for nobody to fill and cancelling is not a way out of a bad price. A
   close order whose position was liquidated in the meantime cancels without a price.
 - Fill prices need at least 3 verified Wormhole signatures under partial verification and a confidence interval
-  within 0.2% of the price, and within a quarter of what the margin covers: `conf / price × leverage ≤ 25%`.
-  At 1000× the margin covers a 10 bps move, so the fill price may carry at most 2.5 bps of uncertainty.
+  within 0.2% of the price. **An open** must also be within a quarter of what its margin covers:
+  `conf / price × leverage ≤ 25%`, so at 1000×, where the margin covers a 10 bps move, at most 2.5 bps of
+  uncertainty; nobody opens at an entry that is noise next to their margin. A close does not take this bound:
+  its price is fixed all the same and the uncertainty cuts both ways, and holding closes back in a volatile
+  market would keep traders in when they most want out.
 - Liquidations are covered below.
 
 ### Session keys
@@ -178,8 +186,9 @@ is constrained so there is nothing to pick:
 - **no older than the newest price the market has seen**, so a liquidator cannot reach back past a price that
   was not bust;
 - **bust at the trader's end of its confidence interval**: `price + conf ≤ bust` for a long, `price − conf ≥
-  bust` for a short. An uncertain price does not take the margin; the vault loses nothing by waiting, since a
-  trader's loss is capped at the margin either way.
+  bust` for a short. An uncertain price does not take the margin. Waiting is not free for the vault: while the
+  price is uncertain a position past its bust price stays open, and if the price comes back the trader is saved,
+  a small option left with the trader. What the vault gives up is capped at the margin.
 
 ### Open interest cap
 
@@ -355,6 +364,39 @@ $BUST launches from Bust's own Raydium LaunchLab platform, and the platform's fe
 - `sweep_launch_fees` moves what was claimed. USDC enters the vault as capital and raises the high-water mark.
   Any other quote token goes to the registered swap wallet, to be swapped to USDC and seeded back. Nothing else
   can receive it.
+
+## Economics
+
+The rules above were run over real Pyth candles with the off-chain engine, which implements the same math
+(the unit tests pin it to the cent). The simulation lives in the app repository (`sim/run.ts`, `sim/stress.ts`);
+these are its results at the default parameters.
+
+**The vault's edge.** Against traders taking random sides it keeps 1–7 bps of volume, from the haircuts on wins
+and the bust buffer. At high leverage that is a large share of margin: a 1000× trader holding 15 minutes loses
+about a third of the margin per trade on average.
+
+**Floors and debt** (a year of hourly candles, starting from an empty vault, floors of 25,000 USDC per market
+and 50,000 in total):
+
+| trader behaviour | worst debt in 24 h | 72 h | 7 days | 30 days |
+|---|---|---|---|---|
+| knows each window's direction in advance and holds the floors | 7,220 | 13,654 | 15,535 | 20,061 |
+| momentum: trades the last hour's direction on the two busiest markets | 5,940 | 7,554 | 8,879 | 11,285 |
+| random flow: 20 traders an hour at 10×, 100× and 500× | 981 | 993 | 993 | 993 |
+
+The vault ends the year about 73,000 USDC up from random flow, and 114,000 up against the momentum trader: the
+haircuts make trend following lose too. `max_debt` sits at 15,000, about the worst 72 hours of the first row,
+which no realistic flow reaches.
+
+**Hedged xBUST farming.** Two accounts open a long and a short together; the losing one earns xBUST for its
+loss and the winning one keeps its haircut profit. Over two weeks of minute candles, the cheapest way to do it
+(2× held for 4 hours) costs 15.2 cents per dollar of loss counted; trades inside the holdback band cost far
+more. With the xBUST share at 15% and the vault keeping the minimum 20%, a dollar of loss earns 2.2–4.7 cents
+of xBUST depending on who else trades, so farming would need an xBUST share of 49–104% to break even. Selling
+xBUST at the wall for half its value doubles that.
+
+The candles do not include regimes like March 2020 or 2022, traders are modelled as random or simply
+adversarial rather than informed, and xBUST is valued at the $BUST it converts to with $BUST flat.
 
 ## Ledger invariants
 
