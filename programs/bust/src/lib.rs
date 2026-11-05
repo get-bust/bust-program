@@ -108,6 +108,10 @@ pub mod bust {
         instructions::xbust::handle_claim_xbust(ctx, epoch)
     }
 
+    pub fn close_unfunded_loss(ctx: Context<CloseUnfundedLoss>, epoch: u64) -> Result<()> {
+        instructions::xbust::handle_close_unfunded_loss(ctx, epoch)
+    }
+
     pub fn lock_xbust(ctx: Context<LockXbust>, amount: u64) -> Result<()> {
         instructions::xbust::handle_lock_xbust(ctx, amount)
     }

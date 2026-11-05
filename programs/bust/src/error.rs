@@ -54,4 +54,8 @@ pub enum PerpError {
     EpochNotFunded,
     #[msg("Signer is not the registered buyback authority")]
     NotBuybackAuthority,
+    #[msg("The epoch's funding window has closed")]
+    FundingWindowClosed,
+    #[msg("The epoch can still be funded")]
+    FundingWindowOpen,
 }

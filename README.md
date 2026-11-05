@@ -84,7 +84,7 @@ Every account is a PDA of the program.
 | Account owner | `create_user`, `deposit`, `withdraw`, `set_session`, `revoke_session`, `stake`, `request_unstake`, `withdraw_unstaked`, `claim_rewards`, `lock_xbust`, `convert_vested` |
 | Owner or session key | `request_open`, `request_close` |
 | Buyback authority | `fund_epoch` |
-| Anyone (keepers) | `sweep_deposit`, `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `claim_ticket`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `claim_launch_fees`, `sweep_launch_fees`, `seed_vault` |
+| Anyone (keepers) | `sweep_deposit`, `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `claim_ticket`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `close_unfunded_loss`, `claim_launch_fees`, `sweep_launch_fees`, `seed_vault` |
 
 The permissionless instructions cannot move money anywhere the program has not fixed in advance:
 `withdraw_bucket` pays only the registered wallets, `claim_xbust` mints only to the loser's account, and the
@@ -268,6 +268,9 @@ xBUST is the losers' share of each epoch.
    `xbust = bust × (supply + locked + unclaimed) / treasury`, or 1:1 when there are no claims yet.
 3. **Claiming.** Each loser receives `loss / total_loss` of the epoch's pool, minted to their own account. The
    record closes and its rent goes back to the keeper who paid it.
+
+   An epoch can be funded for 30 epochs after it closes. Past that window it can no longer be funded, and
+   `close_unfunded_loss` closes its loss records so their rent goes back to the keeper.
 4. **Selling or waiting.** xBUST is a classic SPL token, so it can be sold. Or the holder locks it: the xBUST
    is burned and unlocks linearly over 30 days into $BUST at that day's rate,
 

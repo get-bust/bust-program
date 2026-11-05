@@ -296,3 +296,63 @@ fn migrate_treasury_grows_only_an_old_account() {
     assert_eq!(after.unclaimed, 0);
     expect_err(migrate(&mut env), "InvalidConfig");
 }
+
+// ---------- epochs nobody funds
+
+/// Runs `n` empty epochs (each distribution closes one)
+fn pass_epochs(env: &mut Env, n: u64) {
+    for _ in 0..n {
+        env.next_epoch();
+        env.distribute().unwrap();
+    }
+}
+
+#[test]
+fn an_unfunded_epoch_frees_its_records_after_the_funding_window() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let a = trade_and_close(&mut env, 100.0, 95.0);
+    let ka = a.kp.pubkey();
+    env.next_epoch();
+    env.distribute().unwrap(); // epoch 0 closes
+
+    // Inside the window the record stays: the epoch can still be funded
+    pass_epochs(&mut env, bust::FUNDING_WINDOW_EPOCHS - 1);
+    expect_err(env.close_unfunded_loss(&ka, 0), "FundingWindowOpen");
+
+    // One more epoch and the window has closed: funding is refused, the record closes and its rent goes back
+    pass_epochs(&mut env, 1);
+    expect_err(env.fund_epoch(0, bust_units(100)), "FundingWindowClosed");
+    let keeper_before = env.svm.get_balance(&env.keeper.pubkey()).unwrap();
+    env.close_unfunded_loss(&ka, 0).unwrap();
+    assert!(env.svm.get_account(&epoch_loss_pda(&ka, 0)).is_none_or(|a| a.data.is_empty()));
+    assert!(env.svm.get_balance(&env.keeper.pubkey()).unwrap() > keeper_before);
+}
+
+#[test]
+fn a_funded_epoch_keeps_its_records_for_their_owners() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let a = trade_and_close(&mut env, 100.0, 95.0);
+    let ka = a.kp.pubkey();
+    env.next_epoch();
+    env.distribute().unwrap();
+    env.fund_epoch(0, bust_units(100)).unwrap(); // funded on the last day of the window at the latest
+    pass_epochs(&mut env, bust::FUNDING_WINDOW_EPOCHS + 5);
+    expect_err(env.close_unfunded_loss(&ka, 0), "EpochFunded");
+    // The loser can still claim, however late
+    let x = env.xbust_account(&ka);
+    env.claim_xbust(&ka, 0, x).unwrap();
+    assert_eq!(env.token_balance(&x), bust_units(100));
+}
+
+#[test]
+fn the_last_epoch_of_the_window_can_still_be_funded() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    trade_and_close(&mut env, 100.0, 95.0);
+    env.next_epoch();
+    env.distribute().unwrap();
+    pass_epochs(&mut env, bust::FUNDING_WINDOW_EPOCHS - 1);
+    env.fund_epoch(0, bust_units(100)).unwrap();
+}

@@ -322,6 +322,14 @@ pub struct EpochRecord {
     pub bump: u8,
 }
 
+impl EpochRecord {
+    /// Whether the record can still be funded, given the distributor's current epoch
+    pub fn in_funding_window(&self, current_epoch: u64) -> bool {
+        // epoch N closes when the distributor moves to N + 1
+        current_epoch.saturating_sub(self.epoch + 1) < crate::constants::FUNDING_WINDOW_EPOCHS
+    }
+}
+
 /// A user's net result in one epoch (updated on close and liquidation). Closed when claimed
 #[account]
 #[derive(InitSpace)]

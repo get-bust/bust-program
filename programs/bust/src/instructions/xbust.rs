@@ -118,6 +118,8 @@ pub struct FundEpoch<'info> {
     pub treasury_tokens: Account<'info, TokenAccount>,
     #[account(mut, seeds = [EPOCH_SEED, &epoch.to_le_bytes()], bump = epoch_record.bump)]
     pub epoch_record: Account<'info, EpochRecord>,
+    #[account(seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
+    pub distributor: Account<'info, Distributor>,
     #[account(mut, token::mint = bust_mint, token::authority = authority)]
     pub authority_bust: Account<'info, TokenAccount>,
     pub bust_mint: Account<'info, Mint>,
@@ -135,6 +137,7 @@ pub fn handle_fund_epoch(ctx: Context<FundEpoch>, _epoch: u64, amount: u64) -> R
     let record = &mut ctx.accounts.epoch_record;
     require!(!record.funded, PerpError::EpochFunded);
     require!(record.total_loss > 0, PerpError::NothingToWithdraw);
+    require!(record.in_funding_window(ctx.accounts.distributor.epoch), PerpError::FundingWindowClosed);
 
     // xBUST = $BUST × (supply + locked + unclaimed) / treasury; 1:1 with no claims. Rounded down: the rate never falls
     let treasury = &ctx.accounts.treasury;
@@ -225,6 +228,36 @@ pub fn handle_claim_xbust(ctx: Context<ClaimXbust>, _epoch: u64) -> Result<()> {
         )?;
     }
     emit!(XbustClaimed { owner: ctx.accounts.epoch_loss.owner, epoch: record.epoch, loss, amount });
+    Ok(())
+}
+
+// ---------- close_unfunded_loss (anyone, once an epoch's funding window has closed unfunded)
+
+#[derive(Accounts)]
+#[instruction(epoch: u64)]
+pub struct CloseUnfundedLoss<'info> {
+    #[account(seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
+    pub distributor: Account<'info, Distributor>,
+    #[account(seeds = [EPOCH_SEED, &epoch.to_le_bytes()], bump = epoch_record.bump)]
+    pub epoch_record: Account<'info, EpochRecord>,
+    #[account(
+        mut,
+        close = rent_payer,
+        seeds = [EPOCH_LOSS_SEED, epoch_loss.owner.as_ref(), &epoch.to_le_bytes()],
+        bump = epoch_loss.bump,
+    )]
+    pub epoch_loss: Account<'info, EpochLoss>,
+    /// CHECK: Paid the record's rent (address stored on the record) and gets it back
+    #[account(mut, address = epoch_loss.rent_payer)]
+    pub rent_payer: UncheckedAccount<'info>,
+}
+
+/// An epoch nobody funded within the window will never pay xBUST: its loss records only hold rent. They close, and
+/// the rent goes back to the keeper that opened them
+pub fn handle_close_unfunded_loss(ctx: Context<CloseUnfundedLoss>, _epoch: u64) -> Result<()> {
+    let record = &ctx.accounts.epoch_record;
+    require!(!record.funded, PerpError::EpochFunded);
+    require!(!record.in_funding_window(ctx.accounts.distributor.epoch), PerpError::FundingWindowOpen);
     Ok(())
 }
 

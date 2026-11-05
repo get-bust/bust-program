@@ -527,6 +527,7 @@ impl Env {
                 treasury: treasury(),
                 treasury_tokens: treasury_tokens(),
                 epoch_record: epoch_pda(epoch),
+                distributor: distributor(),
                 authority_bust: src,
                 bust_mint: mint,
                 xbust_mint: xbust_mint(),
@@ -571,6 +572,23 @@ impl Env {
                 xbust_mint: xbust_mint(),
                 owner_xbust: dest,
                 token_program: spl_token::ID,
+            }
+            .to_account_metas(None),
+        );
+        self.send(&[ix], &[&c])
+    }
+
+    pub fn close_unfunded_loss(&mut self, owner: &Pubkey, epoch: u64) -> Result<(), String> {
+        let c = self.caller();
+        let rec: bust::EpochLoss = self.account(&epoch_loss_pda(owner, epoch));
+        let ix = Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::CloseUnfundedLoss { epoch }.data(),
+            bust::accounts::CloseUnfundedLoss {
+                distributor: distributor(),
+                epoch_record: epoch_pda(epoch),
+                epoch_loss: epoch_loss_pda(owner, epoch),
+                rent_payer: rec.rent_payer,
             }
             .to_account_metas(None),
         );

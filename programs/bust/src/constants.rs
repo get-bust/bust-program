@@ -56,6 +56,10 @@ pub const LAUNCHPAD_PROGRAMS: [Pubkey; 2] = [
 pub const IX_CLAIM_PLATFORM_FEE: [u8; 8] = [156, 39, 208, 135, 76, 237, 61, 72];
 pub const IX_CLAIM_PLATFORM_FEE_FROM_VAULT: [u8; 8] = [117, 241, 198, 168, 248, 218, 80, 29];
 
+/// An epoch can be funded for this many epochs after it closes. After that its loss records can be closed and their
+/// rent returned, and it can no longer be funded (its losers' shares would have nobody left to claim them)
+pub const FUNDING_WINDOW_EPOCHS: u64 = 30;
+
 /// One day (s); open interest utilisation is tracked per day
 pub const DAY_SEC: i64 = 86_400;
 
