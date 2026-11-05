@@ -456,7 +456,7 @@ Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change 
 | OI cap | max(0.6 × net vault, floor) per market and side, and over all markets per side |
 | OI floors | 25,000 USDC per market and side, 50,000 USDC over all markets; past 15,000 USDC of debt, × 15,000 / debt |
 | Minimum deposit sweep | 1 USDC |
-| Max price age / confidence | 5 s / 0.2%, and on fills at most 25% of the margin's move (2.5 bps at 1000×) |
+| Max price age / confidence | 5 s / 0.2%, and on opens at most 25% of the margin's move (2.5 bps at 1000×) |
 | Min Pyth signatures | 3 |
 | Fill delay / largest gap before a fill message counts as an outage | 2 s / 10 s |
 | Max session | 30 days |
