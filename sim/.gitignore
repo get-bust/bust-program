@@ -1,0 +1,3 @@
+data/*
+!data/MANIFEST.sha256
+target/

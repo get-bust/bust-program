@@ -2,6 +2,8 @@
 members = [
     "programs/*"
 ]
+# the simulator is its own workspace: it depends on the program's math, never the other way round
+exclude = ["sim"]
 resolver = "2"
 
 [workspace.package]

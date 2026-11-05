@@ -1,0 +1,12 @@
+[package]
+name = "bust-sim"
+version = "0.1.0"
+description = "Runs the bust program's own settlement math over historical prices"
+edition = "2021"
+publish = false
+license = "BUSL-1.1"
+
+[workspace]
+
+[dependencies]
+bust = { path = "../programs/bust" }
