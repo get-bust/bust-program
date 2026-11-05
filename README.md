@@ -395,6 +395,25 @@ more. With the xBUST share at 15% and the vault keeping the minimum 20%, a dolla
 of xBUST depending on who else trades, so farming would need an xBUST share of 49–104% to break even. Selling
 xBUST at the wall for half its value doubles that.
 
+**Seeing Binance first.** A trader who watches Binance and opens toward its gap from Pyth is filled at the first
+Pyth update 2 s after the request, so the fill delay should take the gap away. `sim/src/latency.rs` measures that
+on all three markets, over 100 moments on each of six days from June to November 2026 and the 100 sharpest
+moments of three volatile days, against Hermes prices and Binance 1 s candles. Most of the raw gap is USDT
+trading away from USD (about 10 bps); the day's median for the market is taken out first. At the sharpest moments,
+at 100× and holding 2 to 10 s:
+
+| strategy | samples | trader's mean result per trade, bps of notional |
+|---|---|---|
+| random side | 900 | -0.8 to -1.4 |
+| follows a gap over 5 bps | 58 | -2.0 to -4.8 |
+| fades a gap over 5 bps | 58 | -0.6 to +0.3, ± 0.5 to 2.2 |
+| knows the close price in advance | 900 | +1.3 to +4.5 |
+
+Neither direction of the gap pays, and knowing the close outright is worth a few bps. At 1000× the leverage
+confidence bound let 6 of those 900 opens through, too few to measure. This is a sample, not a bound: gaps over
+10 bps came up 8 times, standard errors understate the noise because markets move together, and it says nothing
+about milliseconds or about venues other than Binance.
+
 The candles do not include regimes like March 2020 or 2022, traders are modelled as random or simply
 adversarial rather than informed, and xBUST is valued at the $BUST it converts to with $BUST flat.
 
@@ -489,6 +508,9 @@ programs/bust/src/
 programs/bust/tests/
   common/mod.rs       LiteSVM harness
   *.rs                one file per module, plus invariants.rs (randomised)
+sim/
+  src/                the program's settlement over historical prices (cargo test, from sim/)
+  scripts/            fetch the data; python3 scripts/test_fetch_pyth.py
 ```
 
 ## Verifying a deployment
