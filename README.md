@@ -39,8 +39,8 @@ flowchart LR
     V -- wins --> T
     LL[LaunchLab<br/>platform fees] -- USDC, as capital --> V
     V -- "fees + profit above<br/>the high-water mark" --> D{Epoch<br/>distribution}
-    D -- 40% --> B[Buyback wallet:<br/>buy & burn $BUST]
-    D -- 15% --> X[Buyback wallet:<br/>buy $BUST for xBUST]
+    D -- 40% --> B[Buyback wallet, USDC:<br/>buys & burns $BUST off chain]
+    D -- 15% --> X[Buyback wallet, USDC:<br/>buys $BUST for xBUST]
     D -- 30% --> S[$BUST stakers<br/>streamed in USDC]
     D -- 15% --> DEV[Developer]
     X -- fund_epoch --> TR[(xBUST treasury<br/>$BUST)]
@@ -195,13 +195,21 @@ rest becomes vault cash.
 **Win.** The raw profit is cut before it is paid, so small and very large moves cannot be farmed:
 
 1. **Dead band:** moves under 0.2 bps pay nothing.
-2. **Holdback:** inside a small-move band (0.75 to 6 bps), a share `3.597 · width · u²(1−u)²` is held back.
-3. **Impact haircut:** what is left is scaled by `(1 − base) · move / (move + 1/rate + ref / (1e6 · mult))`,
-   where `mult` is the market's size parameter.
+2. **Holdback:** inside a small-move band (0.75 to 6 bps), a share `3.597 · width · u²(1−u)²` of the move is
+   held back, where `u` is how far through the band the move is. `u²(1−u)²` peaks at 1/16 in the middle of the
+   band, so 3.597 makes the largest holdback 22.5% of the band's width, about 1.2 bps.
+3. **Impact haircut:** what is left is scaled by `(1 − base) · move / (move + 1/rate + ref / (1e6 · mult))`.
+   Both extra terms are moves: `1/rate` is 1/15,000 ≈ 0.67 bps, and `ref / (1e6 · mult)`, with the $100,000
+   reference notional and the market's size parameter (484 for ETH, 815 for BTC), is about 2 bps for ETH. A
+   win on a move much larger than them keeps close to 90% of its profit; on a move of the same size, about half.
 4. **Win fee:** 2% of the result.
 
 The margin always comes back. The profit comes from vault cash; see the payout queue for what happens when cash
 is short.
+
+These cuts make the payout far from linear in the move, especially for small moves at high leverage. A client
+should show the expected payout of a close before the user sends it, computed with the same rules
+(`math::win_breakdown`).
 
 ## Payout queue
 
@@ -340,16 +348,29 @@ epoch_loss          = Σ loss over this epoch's EpochLoss records
 
 ## Trust model
 
+**The upgrade authority can do anything.** It can replace the program, and a new program can move every token
+the vault holds. Everything in the table below assumes the program is the one in this repository. On mainnet
+the upgrade authority and the admin will be a Squads multisig with a timelock, so that a change is visible
+before it takes effect; once the program has settled, the upgrade authority can be removed for good.
+
+Within the program as written:
+
 | Party | Can | Cannot |
 |---|---|---|
-| Admin (a multisig on mainnet) | change parameters and distribution shares; change the registered buyback, developer and swap wallets; pause new positions; add markets; upgrade the program | withdraw user balances or vault cash directly; register a launchpad other than Raydium LaunchLab |
-| Buyback authority | fund epochs, or fund them less than the xBUST share | mint xBUST or take $BUST out of the treasury |
-| Keepers | decide when an order is filled, inside the window; liquidate bust positions | choose a price outside the window, liquidate a healthy position, or move funds between users |
+| Upgrade authority | everything (see above) | |
+| Admin | change parameters and distribution shares within validated bounds; change the registered buyback, developer and swap wallets, and so where future shares go; pause new positions; add markets | withdraw user balances, vault cash or shares already distributed to someone else; register a launchpad other than Raydium LaunchLab |
+| Buyback authority | receive the burn and xBUST shares in USDC; fund epochs, or fund them less than the xBUST share, or not at all | mint xBUST or take $BUST out of the treasury |
+| Keepers | fill orders, liquidate bust positions, run the permissionless instructions | choose a fill price, liquidate a healthy position, or move funds between users |
 | Session key | open and close positions for its owner until it expires | withdraw, stake, lock or change the session |
 | Pyth | supply prices | (the program trusts a price that passes the age, signature and confidence checks) |
 
-The buyback wallet's purchases and burns happen off chain. The `Distributed` and `EpochFundedEvent` events let
-anyone compare the USDC it received with the $BUST it put into the treasury.
+### What the burn share is
+
+The program does not burn anything. The 40% "burn" share and the 15% xBUST share are USDC that only the
+registered buyback wallet can withdraw; buying $BUST with it, burning that $BUST and funding the xBUST treasury
+happen off chain and are a commitment of whoever holds that wallet, not something the program enforces. The
+part that is on chain is checkable: `BucketWithdrawn` shows the USDC the wallet took, `EpochFundedEvent` the
+$BUST it put into the treasury, and the burns are ordinary SPL burns from that wallet.
 
 Pausing stops opens only. Closes, liquidations, harvests and withdrawals keep working, so a pause never traps
 funds or leaves a bust position open against the vault.
