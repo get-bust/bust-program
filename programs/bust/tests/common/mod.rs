@@ -309,29 +309,41 @@ impl Env {
 
     /// Writes the Pyth PriceUpdateV2 account directly
     pub fn set_price_full(&mut self, price: f64, conf: f64, publish_time: i64) {
+        let account = self.price;
+        let mantissa = (price * 1e8).round() as i64;
+        self.write_price(account, FEED, mantissa, -8, (conf * 1e8).round() as u64, publish_time, pyth_solana_receiver_sdk::ID);
+    }
+
+    /// Writes any PriceUpdateV2: another feed, another exponent, or an account owned by someone other than Pyth
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_price(
+        &mut self,
+        account: Pubkey,
+        feed_id: [u8; 32],
+        mantissa: i64,
+        exponent: i32,
+        conf: u64,
+        publish_time: i64,
+        owner: Pubkey,
+    ) {
         let update = PriceUpdateV2 {
             write_authority: Pubkey::new_unique(),
             verification_level: self.level,
             price_message: PriceFeedMessage {
-                feed_id: FEED,
-                price: (price * 1e8).round() as i64,
-                conf: (conf * 1e8).round() as u64,
-                exponent: -8,
+                feed_id,
+                price: mantissa,
+                conf,
+                exponent,
                 publish_time,
                 prev_publish_time: publish_time - 1,
-                ema_price: (price * 1e8).round() as i64,
+                ema_price: mantissa,
                 ema_conf: 0,
             },
             posted_slot: 0,
         };
         let mut data = Vec::new();
         update.try_serialize(&mut data).unwrap();
-        self.svm
-            .set_account(
-                self.price,
-                Account { lamports: 10_000_000, data, owner: pyth_solana_receiver_sdk::ID, executable: false, rent_epoch: 0 },
-            )
-            .unwrap();
+        self.svm.set_account(account, Account { lamports: 10_000_000, data, owner, executable: false, rent_epoch: 0 }).unwrap();
     }
 
     /// Publishes a price at the current time
@@ -749,6 +761,12 @@ impl Env {
 
     /// The keeper fills and pays the position's rent
     pub fn execute_open(&mut self, order: &Pubkey) -> Result<Pubkey, String> {
+        let (price, market) = (self.price, self.account::<bust::OrderRequest>(order).market);
+        self.execute_open_with(order, price, market)
+    }
+
+    /// Fill with any price account and market (attack tests)
+    pub fn execute_open_with(&mut self, order: &Pubkey, price_update: Pubkey, market: Pubkey) -> Result<Pubkey, String> {
         let o: bust::OrderRequest = self.account(order);
         let position = position_pda(&o.owner, self.user_state(&o.owner).next_position_id);
         let keeper = self.keeper.insecure_clone();
@@ -760,11 +778,11 @@ impl Env {
                 rent_payer: o.rent_payer,
                 config: config(),
                 vault: vault(),
-                market: o.market,
+                market,
                 user: user_pda(&o.owner),
                 order: *order,
                 position,
-                price_update: self.price,
+                price_update,
                 system_program: system_program::ID,
             }
             .to_account_metas(None),
