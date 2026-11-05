@@ -64,4 +64,6 @@ pub enum PerpError {
     PriceTooOld,
     #[msg("The fill message came after a Pyth outage: the order can only be cancelled")]
     PythOutage,
+    #[msg("Deposit is below the minimum sweep")]
+    DepositTooSmall,
 }

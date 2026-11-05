@@ -132,6 +132,7 @@ pub struct SweepDeposit<'info> {
 pub fn handle_sweep_deposit(ctx: Context<SweepDeposit>) -> Result<()> {
     let amount = ctx.accounts.deposit_tokens.amount;
     require!(amount > 0, PerpError::ZeroAmount);
+    require!(amount >= ctx.accounts.config.params.min_sweep, PerpError::DepositTooSmall);
     let owner = ctx.accounts.user.owner;
     let bump = [ctx.bumps.deposit_authority];
     let seeds: &[&[&[u8]]] = &[&[DEPOSIT_SEED, owner.as_ref(), &bump]];

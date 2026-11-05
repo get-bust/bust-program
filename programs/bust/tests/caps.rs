@@ -103,3 +103,26 @@ fn closing_frees_the_total() {
     env.liquidate(&b).unwrap();
     assert_eq!(env.vault_state().oi_long_total, 0);
 }
+
+#[test]
+fn past_the_debt_limit_the_floors_stop() {
+    let params = Params { oi_floor: usdc(1_000.0), oi_total_floor: usdc(2_000.0), max_debt: usdc(10.0), ..Params::DEFAULT };
+    let mut env = Env::with_params(params);
+    env.seed(usdc(100.0));
+    let winner = env.trader(usdc(1_000.0));
+    let w = winner.kp.pubkey();
+    let pos = env.open(&w, &winner.kp, Side::Long, usdc(30.0), 2).unwrap();
+    env.close_at(&pos, &winner.kp, 400.0).unwrap();
+    assert!(env.vault_state().queue_total > usdc(10.0), "~60 USDC queued, past the 10 USDC limit");
+
+    // In debt beyond the limit: no floor, and the vault itself has nothing to back a position
+    env.set_price(100.0);
+    let t = env.trader(usdc(1_000.0));
+    let o = t.kp.pubkey();
+    expect_err(env.open(&o, &t.kp, Side::Long, usdc(10.0), 2).map(|_| ()), "OpenInterestCap");
+
+    // Once the debt is paid back under the limit, the floor applies again
+    env.seed(usdc(1_000.0));
+    env.harvest_and_claim(&[w]);
+    env.open(&o, &t.kp, Side::Long, usdc(10.0), 2).unwrap();
+}

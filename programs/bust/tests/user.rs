@@ -146,3 +146,15 @@ fn deposits_are_swept_while_paused() {
     env.sweep_deposit(&owner, ata).unwrap();
     assert_eq!(env.user_state(&owner).balance, usdc(10.0));
 }
+
+#[test]
+fn dust_is_not_swept_until_it_adds_up() {
+    let mut env = Env::new();
+    let t = env.trader(0);
+    let owner = t.kp.pubkey();
+    let ata = send_to_deposit_address(&mut env, &owner, usdc(0.5));
+    expect_err(env.sweep_deposit(&owner, ata), "DepositTooSmall");
+    send_to_deposit_address(&mut env, &owner, usdc(0.5));
+    env.sweep_deposit(&owner, ata).unwrap();
+    assert_eq!(env.user_state(&owner).balance, usdc(1.0));
+}

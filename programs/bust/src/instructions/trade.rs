@@ -271,8 +271,9 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     // The caps follow the vault: net vault × ratio, never below the floor, per market and side and over all markets
     // on a side. A single position cannot exceed either
     let net = ctx.accounts.vault.net_equity();
-    let cap = math::oi_cap(net, params.oi_cap_ratio_ppm, params.oi_floor);
-    let total_cap = math::oi_cap(net, params.oi_total_cap_ratio_ppm, params.oi_total_floor);
+    let (floor, total_floor) = params.floors(ctx.accounts.vault.queue_total);
+    let cap = math::oi_cap(net, params.oi_cap_ratio_ppm, floor);
+    let total_cap = math::oi_cap(net, params.oi_total_cap_ratio_ppm, total_floor);
     let market = &mut ctx.accounts.market;
     observe(market, read.publish_time);
     let oi = match side {

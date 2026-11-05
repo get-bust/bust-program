@@ -99,6 +99,7 @@ A user can deposit by signing `deposit` from their wallet, or by sending USDC to
 an exchange or any other wallet. The deposit address is the associated token account of the PDA
 `["deposit", owner]`. `sweep_deposit` moves the whole balance of a USDC account owned by that PDA into the vault
 and credits the owner. It needs no signature from the owner, so a keeper sweeps new deposits as they arrive.
+Balances under `min_sweep` (1 USDC) wait until more arrives, so dust cannot make keepers pay a transaction each.
 
 The owner is taken from the user account and the PDA is derived from it, so a deposit can only ever be
 credited to the address's owner. Only USDC is swept; other tokens sent there stay where they are. Sweeping
@@ -193,8 +194,13 @@ over all markets:      Σ OI on that side + new notional ≤ max(net vault × 0.
   SOL could each reach 0.6 of the vault, 1.8× the vault on one side in a market-wide move.
 - **The floors** keep an empty or indebted vault trading. The vault takes the other side of every trade and the
   settlement rules give it an edge, so it fills by being traded against; a cap tied only to the vault would
-  keep a new vault empty and stop an indebted one from earning its way back. The floors bound how much debt it
-  can take on meanwhile.
+  keep a new vault empty and stop an indebted one from earning its way back.
+- **The floors bound exposure at any moment, not debt.** Positions that close and reopen can keep adding to the
+  queue. So once queued debt passes `max_debt`, the floors stop applying and the caps follow the vault alone,
+  which in debt means no new positions until the debt is back under the limit.
+- **How an indebted vault recovers:** losses on open positions and on new positions within the floors, LaunchLab
+  fees and any seeded capital all become cash, and `harvest` hands it to the queue. A client should tell a user
+  opening a position while the vault is in debt that a win will be queued.
 - 0.6 comes from a year of minute data on a single market: at that level the vault lost at most half of itself
   in the worst 72 hours. The floors are set by the admin and should come from the same kind of stress test.
 
@@ -277,8 +283,8 @@ burn 40% · stakers 30% · xBUST 15% · developer 15% (rounding remainder to the
 
 - **Open positions.** Cash the vault holds is not all profit while traders are up on open positions: those wins
   will be paid out of it. Each market keeps `Σ notional / entry` per side next to its open interest, so a
-  side's unrealised PnL at any price is one formula (`p · Σ(n/e) − Σn` for longs). `distribute` takes every
-  market with a fresh price, adds up the sides that are up (before haircuts, and without netting the sides that
+  side's unrealised PnL at any price is one formula (`p · Σ(n/e) − Σn` for longs). `distribute` must be given
+  every market and a price for each no older than 5 s, or it fails; it adds up the sides that are up (before haircuts, and without netting the sides that
   are down, so it is an upper bound) and holds that back from the profit.
 - **High-water mark.** Profit is only what vault cash gained since the last distribution. A losing stretch has
   to be won back before anything is paid out. `seed_vault` and LaunchLab fees raise the mark by what they add,
@@ -403,7 +409,8 @@ Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change 
 | Holdback band | 0.75 – 6 bps |
 | Impact base / rate / reference notional | 10% / 15,000 / $100,000 |
 | OI cap | max(0.6 × net vault, floor) per market and side, and over all markets per side |
-| OI floors | 25,000 USDC per market and side, 50,000 USDC over all markets (to be set by stress test) |
+| OI floors | 25,000 USDC per market and side, 50,000 USDC over all markets, off while debt is over 50,000 USDC (to be set by stress test) |
+| Minimum deposit sweep | 1 USDC |
 | Max price age / confidence | 5 s / 0.2%, and on fills at most 25% of the margin's move (2.5 bps at 1000×) |
 | Min Pyth signatures | 3 |
 | Fill delay / largest gap before a fill message counts as an outage | 2 s / 10 s |

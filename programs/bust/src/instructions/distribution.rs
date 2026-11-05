@@ -97,8 +97,9 @@ pub struct RecordUtilization<'info> {
 pub fn handle_record_utilization<'info>(ctx: Context<'info, RecordUtilization<'info>>) -> Result<()> {
     let (vault, params) = (&ctx.accounts.vault, &ctx.accounts.config.params);
     let net = vault.net_equity();
-    let cap = math::oi_cap(net, params.oi_cap_ratio_ppm, params.oi_floor);
-    let total_cap = math::oi_cap(net, params.oi_total_cap_ratio_ppm, params.oi_total_floor);
+    let (floor, total_floor) = params.floors(vault.queue_total);
+    let cap = math::oi_cap(net, params.oi_cap_ratio_ppm, floor);
+    let total_cap = math::oi_cap(net, params.oi_total_cap_ratio_ppm, total_floor);
     // The busiest market, or all markets together on one side, whichever is closer to its cap
     let mut util = math::utilization(vault.oi_long_total, vault.oi_short_total, total_cap);
     for market in all_markets(ctx.remaining_accounts, &ctx.accounts.config)? {

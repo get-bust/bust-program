@@ -30,6 +30,12 @@ pub struct Params {
     /// without it three markets at their own caps would put 1.8× the vault on one side
     pub oi_total_cap_ratio_ppm: u32,
     pub oi_total_floor: u64,
+    /// The floors bound open interest at any moment, not the debt: positions that close and reopen can add to it.
+    /// Once queued debt passes this (USDC base units) the floors stop applying and the caps follow the vault alone
+    pub max_debt: u64,
+    /// Deposit addresses are swept only from this balance up (USDC base units), so that dust cannot make keepers
+    /// pay a transaction per base unit; smaller deposits wait until more arrives
+    pub min_sweep: u64,
     pub max_price_age_sec: u64,
     /// Upper bound on Pyth confidence / price
     pub max_conf_ppm: u32,
@@ -64,6 +70,8 @@ impl Params {
         oi_floor: 25_000_000_000,
         oi_total_cap_ratio_ppm: 600_000,
         oi_total_floor: 50_000_000_000,
+        max_debt: 50_000_000_000,
+        min_sweep: 1_000_000,
         max_price_age_sec: 5,
         max_conf_ppm: 2_000,
         max_conf_margin_ppm: 250_000,
@@ -73,6 +81,15 @@ impl Params {
         fill_delay_sec: 2,
         max_fill_gap_sec: 10,
     };
+
+    /// The floors under the per-market and total caps, given the queued debt
+    pub fn floors(&self, queue_total: u64) -> (u64, u64) {
+        if queue_total > self.max_debt {
+            (0, 0)
+        } else {
+            (self.oi_floor, self.oi_total_floor)
+        }
+    }
 
     pub fn validate(&self) -> bool {
         self.max_leverage >= 1
