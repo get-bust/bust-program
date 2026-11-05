@@ -50,6 +50,11 @@ pub fn minutes(asset: &str, months: &[&str]) -> Option<Vec<Candle>> {
     Some(out)
 }
 
+/// Second candles of one asset for one day
+pub fn seconds(asset: &str, day: &str) -> Vec<Candle> {
+    read(&data_dir().join("binance/1s").join(format!("{asset}USDT-1s-{day}.csv")))
+}
+
 /// Keeps only the times every series has, so index i is the same minute in all of them
 pub fn align(series: Vec<Vec<Candle>>) -> Vec<Vec<Candle>> {
     use std::collections::HashSet;

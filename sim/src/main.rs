@@ -3,10 +3,12 @@
 //!
 //! - edge:  what the vault keeps from traders taking random sides, and what hedged two-account xBUST farming costs
 //! - debt:  the debt an empty vault can run up under the open interest floors, for several kinds of trader
+//! - latency: the edge of a trader who sees Binance before Pyth (latency.rs); `-- latency DAY ...`
 //! - caps:  the vault's loss with every cap full on one side, per-market caps alone against the total cap,
 //!   over the last 12 months and each crisis month
 
 mod data;
+mod latency;
 mod rules;
 
 use bust::{Params, Side};
@@ -351,6 +353,9 @@ fn caps(sets: &[(String, Markets)]) {
 
 fn main() {
     let what = std::env::args().nth(1).unwrap_or_else(|| "all".into());
+    if what == "latency" {
+        return latency::run(&std::env::args().skip(2).collect::<Vec<_>>());
+    }
     let year = Markets::load(&LAST_12);
     eprintln!("last 12 months: {} aligned minutes on {} markets", year.len(), year.ids.len());
     if what == "edge" || what == "all" {

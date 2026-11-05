@@ -462,6 +462,8 @@ name = "bust-sim"
 version = "0.1.0"
 dependencies = [
  "bust",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
