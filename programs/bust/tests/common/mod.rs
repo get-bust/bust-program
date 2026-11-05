@@ -24,6 +24,8 @@ pub use {
 };
 
 pub const NOW: i64 = 1_800_000_000;
+/// The tests run without the open interest floors, so caps follow the vault alone (tests/caps.rs covers the floors)
+pub const TEST_PARAMS: Params = Params { oi_floor: 0, oi_total_floor: 0, ..Params::DEFAULT };
 /// Orders fill at the first price published this long after the request
 pub const FILL_DELAY: i64 = Params::DEFAULT.fill_delay_sec;
 pub const FEED: [u8; 32] = [7u8; 32];
@@ -134,6 +136,10 @@ pub struct Env {
 
 impl Env {
     pub fn new() -> Self {
+        Self::with_params(TEST_PARAMS)
+    }
+
+    pub fn with_params(params: Params) -> Self {
         let mut svm = LiteSVM::new();
         let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy/bust.so"));
         svm.add_program(bust::id(), bytes).unwrap();
@@ -161,7 +167,7 @@ impl Env {
         let keeper = env.keeper.pubkey();
         env.svm.airdrop(&keeper, 10_000_000_000).unwrap();
         env.mint = env.create_mint();
-        env.initialize(Params::DEFAULT).unwrap();
+        env.initialize(params).unwrap();
         let admin = env.admin.insecure_clone();
         env.add_market(&admin, 0, FEED, ETH_MULT).unwrap();
 

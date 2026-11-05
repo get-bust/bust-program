@@ -136,9 +136,10 @@ proptest! {
     }
 
     #[test]
-    fn the_oi_cap_never_exceeds_the_vault(equity in any::<i64>(), ratio in 0u32..=1_000_000) {
-        let cap = math::oi_cap(equity as i128, ratio);
-        prop_assert!(cap as i128 <= equity.max(0) as i128);
+    fn the_oi_cap_is_the_vault_share_or_the_floor(equity in any::<i64>(), ratio in 0u32..=1_000_000, floor in any::<u64>()) {
+        let cap = math::oi_cap(equity as i128, ratio, floor);
+        prop_assert!(cap >= floor);
+        prop_assert!(cap as i128 <= (equity.max(0) as i128).max(floor as i128));
     }
 
     // ---------- utilisation

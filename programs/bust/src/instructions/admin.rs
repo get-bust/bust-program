@@ -45,6 +45,8 @@ pub fn handle_initialize(ctx: Context<Initialize>, params: Params) -> Result<()>
         queue_unclaimed: 0,
         queued_cumulative: 0,
         paid_cumulative: 0,
+        oi_long_total: 0,
+        oi_short_total: 0,
         bump: ctx.bumps.vault,
         tokens_bump: ctx.bumps.vault_tokens,
     });

@@ -116,12 +116,10 @@ pub fn utilization(oi_long: u64, oi_short: u64, cap: u64) -> u32 {
     (oi * PPM / cap as u128).min(PPM) as u32
 }
 
-/// Open interest cap per market and side: max(0, net vault) × ratio
-pub fn oi_cap(net_equity: i128, ratio_ppm: u32) -> u64 {
-    if net_equity <= 0 {
-        return 0;
-    }
-    (net_equity as u128 * ratio_ppm as u128 / PPM) as u64
+/// Open interest cap: max(max(0, net vault) × ratio, floor)
+pub fn oi_cap(net_equity: i128, ratio_ppm: u32, floor: u64) -> u64 {
+    let by_vault = if net_equity <= 0 { 0 } else { (net_equity as u128 * ratio_ppm as u128 / PPM).min(u64::MAX as u128) as u64 };
+    by_vault.max(floor)
 }
 
 pub fn fee_of(amount: u64, fee_ppm: u32) -> u64 {
@@ -215,7 +213,10 @@ mod tests {
 
     #[test]
     fn oi_cap_tracks_equity() {
-        assert_eq!(oi_cap(usdc(25_000.0) as i128, 600_000), usdc(15_000.0));
-        assert_eq!(oi_cap(-5, 600_000), 0);
+        assert_eq!(oi_cap(usdc(25_000.0) as i128, 600_000, 0), usdc(15_000.0));
+        assert_eq!(oi_cap(-5, 600_000, 0), 0);
+        // the floor holds when the vault is empty or in debt, and gives way once the vault is larger
+        assert_eq!(oi_cap(-5, 600_000, usdc(1_000.0)), usdc(1_000.0));
+        assert_eq!(oi_cap(usdc(25_000.0) as i128, 600_000, usdc(1_000.0)), usdc(15_000.0));
     }
 }

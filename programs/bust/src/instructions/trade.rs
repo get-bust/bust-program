@@ -220,8 +220,11 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     let (side, margin, leverage) = (order.side, order.margin, order.leverage);
     let notional = margin.checked_mul(leverage as u64).ok_or(PerpError::MathOverflow)?;
 
-    // The cap follows the vault: net vault × ratio per market and side; a single position cannot exceed it either
-    let cap = math::oi_cap(ctx.accounts.vault.net_equity(), params.oi_cap_ratio_ppm);
+    // The caps follow the vault: net vault × ratio, never below the floor, per market and side and over all markets
+    // on a side. A single position cannot exceed either
+    let net = ctx.accounts.vault.net_equity();
+    let cap = math::oi_cap(net, params.oi_cap_ratio_ppm, params.oi_floor);
+    let total_cap = math::oi_cap(net, params.oi_total_cap_ratio_ppm, params.oi_total_floor);
     let market = &mut ctx.accounts.market;
     let oi = match side {
         Side::Long => &mut market.oi_long,
@@ -230,6 +233,14 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     let new_oi = oi.checked_add(notional).ok_or(PerpError::MathOverflow)?;
     require!(new_oi <= cap, PerpError::OpenInterestCap);
     *oi = new_oi;
+    let vault = &mut ctx.accounts.vault;
+    let total = match side {
+        Side::Long => &mut vault.oi_long_total,
+        Side::Short => &mut vault.oi_short_total,
+    };
+    let new_total = total.checked_add(notional).ok_or(PerpError::MathOverflow)?;
+    require!(new_total <= total_cap, PerpError::OpenInterestCap);
+    *total = new_total;
 
     let user = &mut ctx.accounts.user;
     user.reserved = user.reserved.checked_sub(margin).ok_or(PerpError::MathOverflow)?;
@@ -297,6 +308,11 @@ fn settle(
         Side::Short => &mut market.oi_short,
     };
     *oi = oi.saturating_sub(position.notional);
+    let total = match position.side {
+        Side::Long => &mut vault.oi_long_total,
+        Side::Short => &mut vault.oi_short_total,
+    };
+    *total = total.saturating_sub(position.notional);
     vault.open_margin = vault.open_margin.checked_sub(position.margin).ok_or(PerpError::MathOverflow)?;
 
     let queue_empty = vault.queue_total == 0;

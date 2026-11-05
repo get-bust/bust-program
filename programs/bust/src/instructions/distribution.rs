@@ -92,8 +92,12 @@ pub struct RecordUtilization<'info> {
 /// Samples open interest utilisation. It only reads chain state, so the caller gets no choice, and the sample is
 /// weighted by how long it stands: calling often during a brief spike adds nothing
 pub fn handle_record_utilization<'info>(ctx: Context<'info, RecordUtilization<'info>>) -> Result<()> {
-    let cap = math::oi_cap(ctx.accounts.vault.net_equity(), ctx.accounts.config.params.oi_cap_ratio_ppm);
-    let mut util = 0u32;
+    let (vault, params) = (&ctx.accounts.vault, &ctx.accounts.config.params);
+    let net = vault.net_equity();
+    let cap = math::oi_cap(net, params.oi_cap_ratio_ppm, params.oi_floor);
+    let total_cap = math::oi_cap(net, params.oi_total_cap_ratio_ppm, params.oi_total_floor);
+    // The busiest market, or all markets together on one side, whichever is closer to its cap
+    let mut util = math::utilization(vault.oi_long_total, vault.oi_short_total, total_cap);
     for info in ctx.remaining_accounts.iter() {
         let market: Account<Market> = Account::try_from(info)?;
         util = util.max(math::utilization(market.oi_long, market.oi_short, cap));

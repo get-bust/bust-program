@@ -165,10 +165,21 @@ whole margin goes to the vault, less the loss fee.
 
 ### Open interest cap
 
-At fill time the open interest on the market's side, plus the new position, must stay under
-`net vault × oi_cap_ratio_ppm` (0.6), where the net vault is cash minus queued debt. Longs and shorts on a
-market each have their own cap. 0.6 comes from a year of minute data: at that level the vault lost at most half
-of itself in the worst 72 hours. A vault whose debt reaches its cash accepts no new positions.
+At fill time two caps apply, each computed on the net vault (cash minus queued debt):
+
+```
+per market and side:   OI on that side + new notional ≤ max(net vault × 0.6, oi_floor)
+over all markets:      Σ OI on that side + new notional ≤ max(net vault × 0.6, oi_total_floor)
+```
+
+- **The total cap** exists because the markets move together. With only per-market caps, longs on BTC, ETH and
+  SOL could each reach 0.6 of the vault, 1.8× the vault on one side in a market-wide move.
+- **The floors** keep an empty or indebted vault trading. The vault takes the other side of every trade and the
+  settlement rules give it an edge, so it fills by being traded against; a cap tied only to the vault would
+  keep a new vault empty and stop an indebted one from earning its way back. The floors bound how much debt it
+  can take on meanwhile.
+- 0.6 comes from a year of minute data on a single market: at that level the vault lost at most half of itself
+  in the worst 72 hours. The floors are set by the admin and should come from the same kind of stress test.
 
 ## Settlement
 
@@ -224,8 +235,7 @@ While anything is owed:
 
 - new wins pay nothing up front and are queued whole;
 - no fees are taken, since they would come out of money already owed;
-- the open interest cap is computed on cash minus the debt, so it shrinks by the debt and is zero once the
-  debt reaches the cash;
+- the open interest caps are computed on cash minus the debt, so they shrink to the floors;
 - `distribute` refuses to run. Paid but unclaimed tickets do not hold it up.
 
 ## Epoch distribution
@@ -347,7 +357,8 @@ Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change 
 | Dead band | 0.2 bps |
 | Holdback band | 0.75 – 6 bps |
 | Impact base / rate / reference notional | 10% / 15,000 / $100,000 |
-| OI cap | 0.6 × net vault, per market and side |
+| OI cap | max(0.6 × net vault, floor) per market and side, and over all markets per side |
+| OI floors | 25,000 USDC per market and side, 50,000 USDC over all markets (to be set by stress test) |
 | Max price age / confidence | 5 s / 0.2% |
 | Min Pyth signatures | 3 |
 | Fill delay / order timeout | 2 s / 60 s |

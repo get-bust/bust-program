@@ -21,8 +21,15 @@ pub struct Params {
     pub impact_rate_multiplier: u32,
     /// USD, whole units
     pub impact_reference_notional: u64,
-    /// Open interest cap = net vault × ratio (per market and side)
+    /// Open interest cap per market and side = max(net vault × ratio, floor)
     pub oi_cap_ratio_ppm: u32,
+    /// USDC base units. Lets an empty or indebted vault keep trading, so that it can earn its way back,
+    /// while the debt it can take on stays bounded
+    pub oi_floor: u64,
+    /// Cap on the sum over all markets, per side = max(net vault × ratio, floor). The markets move together, so
+    /// without it three markets at their own caps would put 1.8× the vault on one side
+    pub oi_total_cap_ratio_ppm: u32,
+    pub oi_total_floor: u64,
     pub max_price_age_sec: u64,
     /// Upper bound on Pyth confidence / price
     pub max_conf_ppm: u32,
@@ -51,6 +58,9 @@ impl Params {
         impact_rate_multiplier: 15_000,
         impact_reference_notional: 100_000,
         oi_cap_ratio_ppm: 600_000,
+        oi_floor: 25_000_000_000,
+        oi_total_cap_ratio_ppm: 600_000,
+        oi_total_floor: 50_000_000_000,
         max_price_age_sec: 5,
         max_conf_ppm: 2_000,
         max_session_sec: 30 * 24 * 60 * 60,
@@ -72,6 +82,7 @@ impl Params {
             && self.impact_base_ppm < 1_000_000
             && self.impact_rate_multiplier > 0
             && self.oi_cap_ratio_ppm <= 1_000_000
+            && self.oi_total_cap_ratio_ppm <= 1_000_000
             && self.max_price_age_sec > 0
             && self.max_session_sec > 0
             && self.min_price_signatures > 0
@@ -111,6 +122,9 @@ pub struct Vault {
     /// Every amount ever queued, and every amount ever paid against the queue
     pub queued_cumulative: u64,
     pub paid_cumulative: u64,
+    /// Open interest summed over all markets, per side
+    pub oi_long_total: u64,
+    pub oi_short_total: u64,
     pub bump: u8,
     pub tokens_bump: u8,
 }
