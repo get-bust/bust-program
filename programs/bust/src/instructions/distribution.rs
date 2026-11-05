@@ -37,8 +37,10 @@ pub fn handle_init_distributor(ctx: Context<InitDistributor>, params: DistParams
         epoch: 0,
         epoch_started_at: Clock::get()?.unix_timestamp,
         cash_mark: ctx.accounts.vault.cash,
-        util_ppm: [0; 7],
+        util_area: [0; 7],
         util_day: [i64::MIN; 7],
+        util_last: 0,
+        util_last_at: Clock::get()?.unix_timestamp,
         burn_usdc: 0,
         staker_usdc: 0,
         xbust_usdc: 0,
@@ -87,7 +89,8 @@ pub struct RecordUtilization<'info> {
     // remaining_accounts: Market accounts (owner and type checked by Account::try_from)
 }
 
-/// Records today's peak open interest utilisation. It only reads chain state; the caller gets no choice
+/// Samples open interest utilisation. It only reads chain state, so the caller gets no choice, and the sample is
+/// weighted by how long it stands: calling often during a brief spike adds nothing
 pub fn handle_record_utilization<'info>(ctx: Context<'info, RecordUtilization<'info>>) -> Result<()> {
     let cap = math::oi_cap(ctx.accounts.vault.net_equity(), ctx.accounts.config.params.oi_cap_ratio_ppm);
     let mut util = 0u32;
@@ -95,8 +98,7 @@ pub fn handle_record_utilization<'info>(ctx: Context<'info, RecordUtilization<'i
         let market: Account<Market> = Account::try_from(info)?;
         util = util.max(math::utilization(market.oi_long, market.oi_short, cap));
     }
-    let today = Clock::get()?.unix_timestamp.div_euclid(DAY_SEC);
-    ctx.accounts.distributor.record_util(today, util);
+    ctx.accounts.distributor.record_util(Clock::get()?.unix_timestamp, util);
     Ok(())
 }
 
@@ -135,6 +137,7 @@ pub fn handle_distribute(ctx: Context<Distribute>) -> Result<()> {
     require!(vault.queue_total == 0, PerpError::QueueNotEmpty);
 
     let profit = vault.cash.saturating_sub(d.cash_mark);
+    d.accrue_util(now);
     let today = now.div_euclid(DAY_SEC);
     let keep = d.peak_util(today).clamp(d.params.keep_min_ppm, d.params.keep_max_ppm);
     let mut s = math::split(profit, vault.fees_accrued, keep, &d.params);

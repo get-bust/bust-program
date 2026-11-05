@@ -128,8 +128,8 @@ pub struct DistParams {
     pub staker_ppm: u32,
     pub xbust_ppm: u32,
     pub dev_ppm: u32,
-    /// Share of vault profit that stays in the vault: u = peak open interest utilisation of the last 7 days,
-    /// clamped to this range
+    /// Share of vault profit that stays in the vault: u = the highest daily time-weighted open interest utilisation
+    /// of the last 7 days, clamped to this range
     pub keep_min_ppm: u32,
     pub keep_max_ppm: u32,
 }
@@ -169,9 +169,13 @@ pub struct Distributor {
     pub epoch_started_at: i64,
     /// Vault cash after the last distribution (high-water mark); profit is what sits above it. seed_vault raises it too
     pub cash_mark: u64,
-    /// Peak open interest utilisation (ppm) per day and the day number; a 7-day ring
-    pub util_ppm: [u32; 7],
+    /// Open interest utilisation integrated over each day (ppm × seconds) and the day number; a 7-day ring.
+    /// A sample counts from when it was recorded until the next one, so a brief spike weighs only for as long as it lasted
+    pub util_area: [u64; 7],
     pub util_day: [i64; 7],
+    /// The latest sample and when it was recorded
+    pub util_last: u32,
+    pub util_last_at: i64,
     pub burn_usdc: u64,
     pub staker_usdc: u64,
     pub xbust_usdc: u64,
@@ -189,18 +193,35 @@ impl Distributor {
         self.burn_usdc + self.staker_usdc + self.xbust_usdc + self.dev_usdc
     }
 
-    /// Peak utilisation of the last 7 days
+    /// The highest daily average utilisation of the last 7 days (a day still under way is averaged over a whole day)
     pub fn peak_util(&self, today: i64) -> u32 {
-        (0..7).filter(|&i| self.util_day[i] > today - 7).map(|i| self.util_ppm[i]).max().unwrap_or(0)
+        (0..7).filter(|&i| self.util_day[i] > today - 7).map(|i| (self.util_area[i] / DAY_SEC as u64) as u32).max().unwrap_or(0)
     }
 
-    pub fn record_util(&mut self, today: i64, util_ppm: u32) {
-        let slot = today.rem_euclid(7) as usize;
-        if self.util_day[slot] != today {
-            self.util_day[slot] = today;
-            self.util_ppm[slot] = 0;
+    /// Adds the latest sample × the time since it was recorded to the days that time covers, up to `now`
+    pub fn accrue_util(&mut self, now: i64) {
+        if now <= self.util_last_at {
+            return;
         }
-        self.util_ppm[slot] = self.util_ppm[slot].max(util_ppm);
+        // older days have left the ring anyway; this also bounds the loop to eight days
+        let mut t = self.util_last_at.max(now - 7 * DAY_SEC);
+        while t < now {
+            let day = t.div_euclid(DAY_SEC);
+            let end = now.min((day + 1) * DAY_SEC);
+            let slot = day.rem_euclid(7) as usize;
+            if self.util_day[slot] != day {
+                self.util_day[slot] = day;
+                self.util_area[slot] = 0;
+            }
+            self.util_area[slot] += self.util_last as u64 * (end - t) as u64;
+            t = end;
+        }
+        self.util_last_at = now;
+    }
+
+    pub fn record_util(&mut self, now: i64, util_ppm: u32) {
+        self.accrue_util(now);
+        self.util_last = util_ppm;
     }
 }
 

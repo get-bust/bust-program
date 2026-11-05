@@ -48,7 +48,7 @@ flowchart LR
 ```
 
 The vault keeps part of its profit before the split. The share it keeps follows how much of its capacity
-traders used over the last seven days, between 20% and 80%.
+traders used over the last seven days (time-weighted), between 20% and 80%.
 
 ## Accounts
 
@@ -229,7 +229,7 @@ Once an epoch has ended and the queue is empty, anyone can call `distribute`:
 
 ```
 profit    = vault cash − high-water mark
-keep      = clamp(peak utilisation over the last 7 days, 20%, 80%)
+keep      = clamp(highest daily average utilisation over the last 7 days, 20%, 80%)
 from_cash = profit × (1 − keep)
 pool      = from_cash + accrued fees
 burn 40% · stakers 30% · xBUST 15% · developer 15% (rounding remainder to the developer)
@@ -238,8 +238,10 @@ burn 40% · stakers 30% · xBUST 15% · developer 15% (rounding remainder to the
 - **High-water mark.** Profit is only what vault cash gained since the last distribution. A losing stretch has
   to be won back before anything is paid out. `seed_vault` and LaunchLab fees raise the mark by what they add,
   so capital put in is never distributed as profit.
-- **Utilisation.** `record_utilization` stores the day's peak of `max(OI long, OI short) / cap` across the
-  markets passed in. It reads only market accounts the program owns, so the caller cannot choose the number.
+- **Utilisation.** `record_utilization` samples `max(OI long, OI short) / cap` across the markets passed in. It
+  reads only market accounts the program owns, so the caller cannot choose the number. Each sample counts from
+  when it is recorded until the next one, and each day keeps the integral, so a day's figure is a time-weighted
+  average: opening a huge position for a few seconds and sampling it many times weighs only those seconds.
 - **The money stays put.** The shares are ledger entries; the USDC stays in the vault token account until it is
   withdrawn. The burn and xBUST shares can only go to the registered buyback wallet and the developer share
   only to the registered developer wallet. The staker share never leaves through `withdraw_bucket`.
@@ -346,7 +348,7 @@ Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change 
 | Fill window / order timeout | 5 s / 30 s |
 | Max session | 30 days |
 | Epoch | 1 day |
-| Vault share of profit | 20% – 80%, by 7-day peak utilisation |
+| Vault share of profit | 20% – 80%, by the highest daily average utilisation of the last 7 days |
 | Shares | 40% burn, 30% stakers, 15% xBUST, 15% developer |
 
 The unstake period and the xBUST unlock period are set when the stake pool and treasury are created (the

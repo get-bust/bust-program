@@ -141,6 +141,33 @@ proptest! {
         prop_assert!(cap as i128 <= equity.max(0) as i128);
     }
 
+    // ---------- utilisation
+
+    /// However samples are spaced, a day's average never exceeds the highest sample, and time is counted once
+    #[test]
+    fn time_weighted_utilization_is_bounded(samples in prop::collection::vec((0i64..200_000, 0u32..=1_000_000), 1..60)) {
+        let day = bust::DAY_SEC;
+        let start = 1_800_000_000i64;
+        let mut d = bust::Distributor {
+            params: DistParams::DEFAULT, epoch: 0, epoch_started_at: start, cash_mark: 0,
+            util_area: [0; 7], util_day: [i64::MIN; 7], util_last: 0, util_last_at: start,
+            burn_usdc: 0, staker_usdc: 0, xbust_usdc: 0, dev_usdc: 0,
+            buyback_tokens: Default::default(), dev_tokens: Default::default(), epoch_loss: 0, bump: 0,
+        };
+        let (mut now, mut highest) = (start, 0u32);
+        for (dt, util) in samples {
+            now += dt;
+            d.record_util(now, util);
+            highest = highest.max(util);
+        }
+        d.accrue_util(now + day);
+        let today = (now + day).div_euclid(day);
+        prop_assert!(d.peak_util(today) <= highest);
+        for i in 0..7 {
+            prop_assert!(d.util_area[i] <= 1_000_000 * day as u64, "a day holds at most a full day at 100%");
+        }
+    }
+
     // ---------- queue tickets
 
     #[test]

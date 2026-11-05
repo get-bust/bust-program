@@ -82,20 +82,25 @@ fn high_water_mark_blocks_profit_until_recovered() {
 }
 
 #[test]
-fn utilization_raises_vault_share() {
+fn sustained_utilization_raises_vault_share() {
     let mut env = Env::new();
     env.seed(usdc(25_000.0));
     let t = env.trader(usdc(2_000.0));
     let o = t.kp.pubkey();
-    // 1000 × 10 = 10,000 notional against a 15,000 cap: ~66.7% utilisation
+    // 1000 × 10 = 10,000 notional against a 15,000 cap: ~66.7% utilisation, held for two days
     let pos = env.open(&o, &t.kp, Side::Long, usdc(1_000.0), 10).unwrap();
     let market = env.market;
     env.record_utilization(&[market]).unwrap();
+    env.set_time(env.now + 2 * bust::DAY_SEC);
+    env.set_price(100.0);
+    env.close_at(&pos, &t.kp, 99.0).unwrap(); // −1%: a 100 loss
+    env.record_utilization(&[market]).unwrap(); // back to zero
+
+    // The day fully inside the two days averages ~66.7%
     let today = env.now.div_euclid(bust::DAY_SEC);
     let util = env.dist_state().peak_util(today);
     assert!(util > 660_000 && util < 670_000, "util {util}");
 
-    env.close_at(&pos, &t.kp, 99.0).unwrap(); // −1%: a 100 loss
     let v = env.vault_state();
     let profit = v.cash - env.dist_state().cash_mark;
     env.next_epoch();
@@ -104,12 +109,42 @@ fn utilization_raises_vault_share() {
     assert_eq!(v.cash - env.vault_state().cash, want.from_cash, "the vault keeps a share equal to utilisation");
     env.assert_invariant();
 
-    // Utilisation older than 7 days does not count
-    for _ in 0..7 {
+    // Days older than 7 do not count
+    for _ in 0..8 {
         env.next_epoch();
     }
+    env.record_utilization(&[market]).unwrap();
     let today = env.now.div_euclid(bust::DAY_SEC);
     assert_eq!(env.dist_state().peak_util(today), 0);
+}
+
+#[test]
+fn a_brief_spike_does_not_move_the_vault_share() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let attacker = env.trader(usdc(2_000.0));
+    let o = attacker.kp.pubkey();
+    let market = env.market;
+    // The whole cap for a couple of seconds, sampled fifty times while it lasts
+    let pos = env.open(&o, &attacker.kp, Side::Long, usdc(1_500.0), 10).unwrap();
+    for _ in 0..50 {
+        env.record_utilization(&[market]).unwrap();
+    }
+    env.close_at(&pos, &attacker.kp, 99.0).unwrap();
+    env.record_utilization(&[market]).unwrap();
+
+    let today = env.now.div_euclid(bust::DAY_SEC);
+    let util = env.dist_state().peak_util(today);
+    assert!(util < 100, "a two-second spike weighs two seconds of the day: {util} ppm");
+
+    // The distribution keeps only the minimum share
+    let v = env.vault_state();
+    let profit = v.cash - env.dist_state().cash_mark;
+    env.next_epoch();
+    env.distribute().unwrap();
+    let want = math::split(profit, v.fees_accrued, DistParams::DEFAULT.keep_min_ppm, &DistParams::DEFAULT);
+    assert_eq!(v.cash - env.vault_state().cash, want.from_cash);
+    env.assert_invariant();
 }
 
 #[test]
