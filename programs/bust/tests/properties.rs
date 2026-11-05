@@ -31,6 +31,18 @@ proptest! {
         prop_assert!(!math::is_bust(side, entry, bust), "a position never opens already bust");
     }
 
+    /// For any parameters the config accepts, a new position is never already bust
+    #[test]
+    fn valid_params_never_open_a_bust_position(side in side(), entry in price(), max_lev in 1u16..=u16::MAX, buf_frac in 0.0f64..1.0, lev_frac in 0.0f64..=1.0) {
+        // any buffer up to the largest the validation accepts for this leverage
+        let buffer = ((999_999 / max_lev as u64) as f64 * buf_frac) as u32;
+        let p = Params { max_leverage: max_lev, liq_buffer_ppm: buffer, ..Params::DEFAULT };
+        prop_assert!(p.validate());
+        let lev = ((max_lev as f64 * lev_frac).round() as u16).clamp(1, max_lev);
+        let bust = math::bust_price(side, entry, lev, p.liq_buffer_ppm);
+        prop_assert!(!math::is_bust(side, entry, bust), "lev {lev} buffer {buffer}");
+    }
+
     #[test]
     fn a_bust_position_has_lost_its_margin_less_the_buffer(side in side(), entry in price(), lev in 1u16..=1000, margin in 1_000_000u64..10_000_000_000) {
         let p = Params::DEFAULT;

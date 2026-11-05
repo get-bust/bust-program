@@ -45,6 +45,8 @@ fn config_rejects_invalid_params() {
         Params { holdback_start_ppm: 600, holdback_end_ppm: 600, ..Params::DEFAULT },
         Params { oi_cap_ratio_ppm: 1_000_001, ..Params::DEFAULT },
         Params { order_timeout_sec: 5, max_fill_delay_sec: 5, ..Params::DEFAULT },
+        // a 5 bps buffer is the whole margin at 2000×
+        Params { max_leverage: 2000, ..Params::DEFAULT },
     ] {
         expect_err(env.update_config(&admin, bad), "InvalidConfig");
     }

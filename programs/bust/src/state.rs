@@ -64,6 +64,8 @@ impl Params {
             && self.win_fee_ppm < 1_000_000
             && self.loss_fee_ppm < 1_000_000
             && self.liq_buffer_ppm < 1_000_000
+            // the buffer must stay inside the margin at max leverage, or positions would open already bust
+            && (self.liq_buffer_ppm as u64) * (self.max_leverage as u64) < 1_000_000
             && self.holdback_start_ppm < self.holdback_end_ppm
             && self.impact_base_ppm < 1_000_000
             && self.impact_rate_multiplier > 0
