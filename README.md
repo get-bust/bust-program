@@ -152,7 +152,9 @@ sequenceDiagram
   proof that it cannot fill the order: it came more than `max_fill_gap_sec` (10 s) after `T`, meaning Pyth was
   down, or its confidence is too wide (below). Otherwise the order can only be filled. Whether an order fills or
   cancels is never a choice, so waiting for nobody to fill and cancelling is not a way out of a bad price. A
-  close order whose position was liquidated in the meantime cancels without a price.
+  close order whose position was liquidated in the meantime cancels without a price. An open order the caps
+  refuse at its fill cancels as well: left waiting it would keep its margin locked, and whoever freed the cap
+  later could fill it at a price long gone. Keepers cancel such an order as soon as the fill is refused.
 - Fill prices need at least 3 verified Wormhole signatures under partial verification and a confidence interval
   within 0.2% of the price. **An open** must also be within a quarter of what its margin covers:
   `conf / price × leverage ≤ 25%`, so at 1000×, where the margin covers a 10 bps move, at most 2.5 bps of

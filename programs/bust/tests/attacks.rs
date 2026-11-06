@@ -212,6 +212,7 @@ fn an_order_fills_once_and_a_filled_order_cannot_be_cancelled() {
             rent_payer: owner,
             user: user_pda(&owner),
             order,
+            vault: vault(),
             market: env.market,
             price_update: env.price,
             position: Pubkey::default(),
@@ -363,4 +364,36 @@ fn tiny_moves_inside_the_dead_band_pay_nothing() {
     }
     assert_eq!(env.user_state(&owner).balance, start);
     env.assert_invariant();
+}
+
+#[test]
+fn an_order_the_caps_refuse_can_be_cancelled_right_away() {
+    // Left waiting, it would keep its margin locked, and freeing the cap later would fill it at a price long gone
+    let mut env = Env::new();
+    env.seed(usdc(1_000.0)); // a cap of 600
+    env.set_price(100.0);
+    let t = env.trader(usdc(2_000.0));
+    let o = t.kp.pubkey();
+    env.open(&o, &t.kp, Side::Long, usdc(60.0), 10).unwrap();
+    let order = env.request_open(&o, &t.kp, Side::Long, usdc(30.0), 10).unwrap();
+    expect_err(env.cancel(&order), "PriceBeforeRequest");
+    env.advance_to_fill();
+    expect_err(env.execute_open(&order).map(|_| ()), "OpenInterestCap");
+    let balance = env.user_state(&o).balance;
+    env.cancel(&order).unwrap();
+    assert_eq!(env.user_state(&o).balance, balance + usdc(30.0));
+    env.assert_invariant();
+}
+
+#[test]
+fn an_order_within_the_caps_still_cannot_be_cancelled() {
+    let mut env = Env::new();
+    env.seed(usdc(1_000.0));
+    env.set_price(100.0);
+    let t = env.trader(usdc(2_000.0));
+    let o = t.kp.pubkey();
+    let order = env.request_open(&o, &t.kp, Side::Long, usdc(30.0), 10).unwrap();
+    env.advance_to_fill();
+    expect_err(env.cancel(&order), "OrderFillable");
+    env.execute_open(&order).unwrap();
 }

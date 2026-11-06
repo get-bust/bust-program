@@ -92,6 +92,20 @@ fn fillable(read: &PriceRead, fill_at: i64, open_leverage: Option<u16>, params: 
         })
 }
 
+/// Whether an open of this size fits both open interest caps right now. The caps follow the vault: net vault × ratio,
+/// never below the floor, per market and side and over all markets on a side. A single position cannot exceed either
+fn fits_caps(vault: &Vault, market: &Market, side: Side, notional: u64, params: &Params) -> bool {
+    let net = vault.net_equity();
+    let (floor, total_floor) = params.floors(vault.queue_total);
+    let (oi, total) = match side {
+        Side::Long => (market.oi_long, vault.oi_long_total),
+        Side::Short => (market.oi_short, vault.oi_short_total),
+    };
+    let within = |open: u64, cap: u64| open.checked_add(notional).is_some_and(|n| n <= cap);
+    within(oi, math::oi_cap(net, params.oi_cap_ratio_ppm, floor))
+        && within(total, math::oi_cap(net, params.oi_total_cap_ratio_ppm, total_floor))
+}
+
 fn check_fill_price(read: &PriceRead, fill_at: i64, open_leverage: Option<u16>, params: &Params) -> Result<()> {
     require_fill_message(read, fill_at)?;
     require!(read.publish_time - fill_at <= params.max_fill_gap_sec, PerpError::PythOutage);
@@ -273,21 +287,14 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     let (side, margin, leverage) = (order.side, order.margin, order.leverage);
     let notional = margin.checked_mul(leverage as u64).ok_or(PerpError::MathOverflow)?;
 
-    // The caps follow the vault: net vault × ratio, never below the floor, per market and side and over all markets
-    // on a side. A single position cannot exceed either
-    let net = ctx.accounts.vault.net_equity();
-    let (floor, total_floor) = params.floors(ctx.accounts.vault.queue_total);
-    let cap = math::oi_cap(net, params.oi_cap_ratio_ppm, floor);
-    let total_cap = math::oi_cap(net, params.oi_total_cap_ratio_ppm, total_floor);
+    require!(fits_caps(&ctx.accounts.vault, &ctx.accounts.market, side, notional, params), PerpError::OpenInterestCap);
     let market = &mut ctx.accounts.market;
     observe(market, read.publish_time);
     let oi = match side {
         Side::Long => &mut market.oi_long,
         Side::Short => &mut market.oi_short,
     };
-    let new_oi = oi.checked_add(notional).ok_or(PerpError::MathOverflow)?;
-    require!(new_oi <= cap, PerpError::OpenInterestCap);
-    *oi = new_oi;
+    *oi = oi.checked_add(notional).ok_or(PerpError::MathOverflow)?;
     let units = match side {
         Side::Long => &mut market.long_units,
         Side::Short => &mut market.short_units,
@@ -298,9 +305,7 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
         Side::Long => &mut vault.oi_long_total,
         Side::Short => &mut vault.oi_short_total,
     };
-    let new_total = total.checked_add(notional).ok_or(PerpError::MathOverflow)?;
-    require!(new_total <= total_cap, PerpError::OpenInterestCap);
-    *total = new_total;
+    *total = total.checked_add(notional).ok_or(PerpError::MathOverflow)?;
 
     let user = &mut ctx.accounts.user;
     user.reserved = user.reserved.checked_sub(margin).ok_or(PerpError::MathOverflow)?;
@@ -623,6 +628,8 @@ pub struct CancelOrder<'info> {
     pub order: Account<'info, OrderRequest>,
     #[account(address = order.market)]
     pub market: Account<'info, Market>,
+    #[account(seeds = [VAULT_SEED], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
     /// The order's fill message, as proof that it cannot fill the order
     pub price_update: Account<'info, PriceUpdateV2>,
     /// CHECK: The position a close order would close, only to see whether it still exists, or whatever order.position
@@ -631,20 +638,25 @@ pub struct CancelOrder<'info> {
     pub position: UncheckedAccount<'info>,
 }
 
-/// Cancels an order whose fill message cannot fill it: it came more than max_fill_gap_sec after the fill time (a Pyth
-/// outage) or its confidence is too wide; or a close order whose position no longer exists. Every other order can only
-/// be filled, so cancelling is never a way out of a fill price the user does not like. An open order's margin comes back.
+/// Cancels an order that cannot fill: its fill message came more than max_fill_gap_sec after the fill time (a Pyth
+/// outage) or its confidence is too wide; a close order whose position no longer exists; or an open order that the caps
+/// refuse right now. Without that last case such an order would keep its margin locked, and whoever freed the cap later
+/// could fill it at a price long gone. Every other order can only be filled, so cancelling is never a way out of a fill
+/// price the user does not like. An open order's margin comes back.
 pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
     let params = ctx.accounts.config.params;
     let order = &ctx.accounts.order;
+    let is_open = order.kind == OrderKind::Open;
     // A close order whose position was liquidated, or closed by another order, since it was requested has nothing
     // to fill; any other order needs its fill message to show that it cannot fill
-    let gone = order.kind == OrderKind::Close && ctx.accounts.position.data_is_empty();
+    let gone = !is_open && ctx.accounts.position.data_is_empty();
     if !gone {
-        let open_leverage = (order.kind == OrderKind::Open).then_some(order.leverage);
+        let open_leverage = is_open.then_some(order.leverage);
         let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
         require_fill_message(&read, order.fill_at)?;
-        require!(!fillable(&read, order.fill_at, open_leverage, &params), PerpError::OrderFillable);
+        let notional = order.margin.saturating_mul(order.leverage as u64);
+        let refused = is_open && !fits_caps(&ctx.accounts.vault, &ctx.accounts.market, order.side, notional, &params);
+        require!(refused || !fillable(&read, order.fill_at, open_leverage, &params), PerpError::OrderFillable);
     }
     if order.kind == OrderKind::Open {
         let user = &mut ctx.accounts.user;

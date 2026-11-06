@@ -929,6 +929,7 @@ impl Env {
                 user: user_pda(&o.owner),
                 order: *order,
                 market: o.market,
+                vault: vault(),
                 price_update: self.price,
                 position: o.position,
             }
