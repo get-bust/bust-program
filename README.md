@@ -3,8 +3,6 @@
 The Solana program behind Bust: leveraged perpetuals traded against a single USDC vault, with the vault's
 profit shared between $BUST stakers, a buyback, and the traders who lost.
 
-> **Status: not audited.** The program has had an internal review only. Do not use it with real funds.
-
 - [Overview](#overview)
 - [Accounts](#accounts)
 - [Instructions and who can call them](#instructions-and-who-can-call-them)
