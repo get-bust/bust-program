@@ -1,0 +1,31 @@
+name: random
+
+# The long walk: too slow for every push, and each night covers seeds no run has tried
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: Seeds to run
+        default: "400"
+      steps:
+        description: Steps per seed
+        default: "500"
+
+env:
+  AGAVE_VERSION: "4.0.0"
+
+jobs:
+  walk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-agave
+      - run: cargo build-sbf
+      - name: Walk from a seed that depends on the date
+        env:
+          BUST_RANDOM_SEEDS: ${{ inputs.seeds || '400' }}
+          BUST_RANDOM_STEPS: ${{ inputs.steps || '500' }}
+        run: BUST_RANDOM_FIRST_SEED=$(( $(date +%s) / 86400 * 1000 )) cargo test -p bust --test random_walk -- --nocapture

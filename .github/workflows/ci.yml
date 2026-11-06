@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  AGAVE_VERSION: "4.0.0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: lint-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - run: cargo fmt --all --check
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-agave
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: test-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Build the program and refuse a stack overflow warning
+        shell: bash
+        run: |
+          touch programs/bust/src/lib.rs
+          cargo build-sbf 2>&1 | tee build.log
+          if grep -E "Stack offset|exceeded max offset|stack frame" build.log; then
+            echo "::error::a function overflows the SBF stack"
+            exit 1
+          fi
+      # the integration tests embed target/deploy/bust.so, so clippy has to come after the build
+      - run: cargo clippy -p bust --all-targets -- -D warnings
+      - run: cargo test -p bust
+
+  sim:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sim/target
+          key: sim-${{ hashFiles('sim/Cargo.lock', 'rust-toolchain.toml') }}
+      - run: cargo test
+        working-directory: sim
+      - run: python3 scripts/test_fetch_pyth.py
+        working-directory: sim
+
+  kani:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: model-checking/kani-github-action@v1
+        with:
+          args: -p bust --lib

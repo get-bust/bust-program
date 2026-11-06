@@ -495,7 +495,11 @@ Requires Rust 1.89.0 (pinned in `rust-toolchain.toml`), the Solana CLI and Ancho
 ```sh
 anchor build          # or: cargo build-sbf
 cargo test
+cargo kani -p bust --lib
+BUST_RANDOM_SEEDS=300 BUST_RANDOM_STEPS=500 cargo test -p bust --test random_walk
 ```
+
+CI runs all of it: lint, tests, proofs and the simulator on every push, and a longer random walk every night.
 
 The integration tests run on [LiteSVM](https://github.com/LiteSVM/litesvm) against the SBF build in
 `target/deploy/bust.so`, so build before testing. Pyth prices are written directly as `PriceUpdateV2`
@@ -510,7 +514,7 @@ programs/bust/src/
   instructions/       admin, user, trade, queue, distribution, staking, xbust, launchlab
 programs/bust/tests/
   common/mod.rs       LiteSVM harness
-  *.rs                one file per module, plus invariants.rs (randomised)
+  *.rs                one file per module, plus invariants.rs and random_walk.rs (randomised)
 sim/
   src/                the program's settlement over historical prices (cargo test, from sim/)
   scripts/            fetch the data; python3 scripts/test_fetch_pyth.py

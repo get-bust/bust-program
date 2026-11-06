@@ -1,0 +1,18 @@
+name: setup-agave
+description: Installs the Agave CLI for cargo build-sbf
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      id: agave
+      with:
+        path: |
+          ~/.local/share/solana
+          ~/.cache/solana
+        key: agave-${{ env.AGAVE_VERSION }}
+    - if: steps.agave.outputs.cache-hit != 'true'
+      shell: bash
+      run: sh -c "$(curl -sSfL https://release.anza.xyz/v${AGAVE_VERSION}/install)"
+    - shell: bash
+      run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
