@@ -506,6 +506,7 @@ programs/bust/src/
   lib.rs              instruction entry points
   state.rs            accounts and parameters
   math.rs             settlement and distribution math, with unit tests
+  proofs.rs           Kani proofs of the math and accounting rules
   instructions/       admin, user, trade, queue, distribution, staking, xbust, launchlab
 programs/bust/tests/
   common/mod.rs       LiteSVM harness
