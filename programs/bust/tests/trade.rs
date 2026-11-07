@@ -177,6 +177,7 @@ fn only_a_pyth_outage_lets_an_order_be_cancelled() {
     let fill_at = env.now + FILL_DELAY;
     let u = env.user_state(&owner);
     assert_eq!((u.balance, u.reserved), (usdc(900.0), usdc(100.0)));
+    assert_eq!(env.market_state().pending_long, usdc(1_000.0));
     let price = env.price;
     env.set_time(fill_at + 600);
 
@@ -193,6 +194,7 @@ fn only_a_pyth_outage_lets_an_order_be_cancelled() {
     env.cancel(&order).unwrap();
     let u = env.user_state(&owner);
     assert_eq!((u.balance, u.reserved), (usdc(1_000.0), 0));
+    assert_eq!((env.market_state().pending_long, env.vault_state().pending_long_total), (0, 0));
     env.assert_invariant();
     assert!(env.svm.get_account(&order).is_none_or(|a| a.lamports == 0), "order closed");
 }
@@ -210,6 +212,7 @@ fn a_fill_message_too_uncertain_to_fill_cancels_the_order() {
     expect_err(env.execute_open(&order).map(|_| ()), "PriceConfidence");
     env.cancel(&order).unwrap();
     assert_eq!(env.user_state(&owner).reserved, 0);
+    assert_eq!((env.market_state().pending_long, env.vault_state().pending_long_total), (0, 0));
 }
 
 #[test]
@@ -371,7 +374,7 @@ fn high_leverage_needs_a_tight_confidence_interval() {
 #[test]
 fn a_close_fills_in_a_volatile_market_that_would_hold_an_open_back() {
     let mut env = Env::new();
-    env.seed(usdc(25_000.0));
+    env.seed(usdc(50_000.0)); // room for the open beside the position that is closing
     let t = env.trader(usdc(1_000.0));
     let owner = t.kp.pubkey();
     let pos = env.open(&owner, &t.kp, Side::Long, usdc(10.0), 1000).unwrap();

@@ -399,6 +399,10 @@ impl Env {
     pub fn config_state(&self) -> bust::Config {
         self.account(&config())
     }
+    pub fn market_state(&self) -> bust::Market {
+        self.account(&self.market)
+    }
+
     pub fn vault_state(&self) -> bust::Vault {
         self.account(&vault())
     }
@@ -807,6 +811,7 @@ impl Env {
                 authority: signer.pubkey(),
                 payer: signer.pubkey(),
                 config: config(),
+                vault: vault(),
                 market: self.market,
                 user: user_pda(owner),
                 order,

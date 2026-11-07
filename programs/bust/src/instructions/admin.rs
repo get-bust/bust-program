@@ -48,6 +48,8 @@ pub fn handle_initialize(ctx: Context<Initialize>, params: Params) -> Result<()>
         paid_cumulative: 0,
         oi_long_total: 0,
         oi_short_total: 0,
+        pending_long_total: 0,
+        pending_short_total: 0,
         bump: ctx.bumps.vault,
         tokens_bump: ctx.bumps.vault_tokens,
     });
@@ -113,6 +115,8 @@ pub fn handle_add_market(
         position_multiplier_milli,
         oi_long: 0,
         oi_short: 0,
+        pending_long: 0,
+        pending_short: 0,
         long_units: 0,
         short_units: 0,
         last_publish_time: 0,

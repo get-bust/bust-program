@@ -151,6 +151,9 @@ pub struct Vault {
     /// Open interest summed over all markets, per side
     pub oi_long_total: u64,
     pub oi_short_total: u64,
+    /// Notional of open orders waiting for their fill, summed over all markets, per side
+    pub pending_long_total: u64,
+    pub pending_short_total: u64,
     pub bump: u8,
     pub tokens_bump: u8,
 }
@@ -465,6 +468,10 @@ pub struct Market {
     pub position_multiplier_milli: u64,
     pub oi_long: u64,
     pub oi_short: u64,
+    /// Notional of open orders waiting for their fill. It counts against the caps from the moment an order is requested,
+    /// and is kept apart from the OI because it has no entry price yet, so it carries no PnL
+    pub pending_long: u64,
+    pub pending_short: u64,
     /// Σ notional × SCALE / entry over open positions on each side. With the OI it gives the side's unrealised PnL at
     /// any price in one step: price × units / SCALE − OI for longs (math::side_pnl)
     pub long_units: u128,

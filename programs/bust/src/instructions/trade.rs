@@ -97,13 +97,38 @@ fn fillable(read: &PriceRead, fill_at: i64, open_leverage: Option<u16>, params: 
 fn fits_caps(vault: &Vault, market: &Market, side: Side, notional: u64, params: &Params) -> bool {
     let net = vault.net_equity();
     let (floor, total_floor) = params.floors(vault.queue_total);
-    let (oi, total) = match side {
-        Side::Long => (market.oi_long, vault.oi_long_total),
-        Side::Short => (market.oi_short, vault.oi_short_total),
+    let (oi, pending, total, pending_total) = match side {
+        Side::Long => (market.oi_long, market.pending_long, vault.oi_long_total, vault.pending_long_total),
+        Side::Short => (market.oi_short, market.pending_short, vault.oi_short_total, vault.pending_short_total),
     };
-    let within = |open: u64, cap: u64| open.checked_add(notional).is_some_and(|n| n <= cap);
-    within(oi, math::oi_cap(net, params.oi_cap_ratio_ppm, floor))
-        && within(total, math::oi_cap(net, params.oi_total_cap_ratio_ppm, total_floor))
+    let within = |open: u64, waiting: u64, cap: u64| {
+        open.checked_add(waiting).and_then(|n| n.checked_add(notional)).is_some_and(|n| n <= cap)
+    };
+    within(oi, pending, math::oi_cap(net, params.oi_cap_ratio_ppm, floor))
+        && within(total, pending_total, math::oi_cap(net, params.oi_total_cap_ratio_ppm, total_floor))
+}
+
+/// The market's and the vault's pending notional on a side
+fn pending_mut<'a>(vault: &'a mut Vault, market: &'a mut Market, side: Side) -> (&'a mut u64, &'a mut u64) {
+    match side {
+        Side::Long => (&mut market.pending_long, &mut vault.pending_long_total),
+        Side::Short => (&mut market.pending_short, &mut vault.pending_short_total),
+    }
+}
+
+/// Holds room under the caps for an open order from its request until it fills or cancels
+fn reserve(vault: &mut Vault, market: &mut Market, side: Side, notional: u64) -> Result<()> {
+    let (pending, total) = pending_mut(vault, market, side);
+    *pending = pending.checked_add(notional).ok_or(PerpError::MathOverflow)?;
+    *total = total.checked_add(notional).ok_or(PerpError::MathOverflow)?;
+    Ok(())
+}
+
+fn release(vault: &mut Vault, market: &mut Market, side: Side, notional: u64) -> Result<()> {
+    let (pending, total) = pending_mut(vault, market, side);
+    *pending = pending.checked_sub(notional).ok_or(PerpError::MathOverflow)?;
+    *total = total.checked_sub(notional).ok_or(PerpError::MathOverflow)?;
+    Ok(())
 }
 
 fn check_fill_price(read: &PriceRead, fill_at: i64, open_leverage: Option<u16>, params: &Params) -> Result<()> {
@@ -138,7 +163,9 @@ pub struct RequestOpen<'info> {
     pub payer: Signer<'info>,
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,
-    #[account(seeds = [MARKET_SEED, &market.index.to_le_bytes()], bump = market.bump)]
+    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
+    #[account(mut, seeds = [MARKET_SEED, &market.index.to_le_bytes()], bump = market.bump)]
     pub market: Account<'info, Market>,
     #[account(mut, seeds = [USER_SEED, user.owner.as_ref()], bump = user.bump)]
     pub user: Account<'info, UserAccount>,
@@ -153,7 +180,9 @@ pub struct RequestOpen<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Margin is locked right away (balance → reserved); the price is set at fill time
+/// Margin is locked right away (balance → reserved) and the caps are checked and the notional reserved right away; the
+/// price is set at fill time. An order that passes here is never refused by the caps later, so no order can sit waiting
+/// for someone to free the cap while the price runs away from its fill price
 pub fn handle_request_open(ctx: Context<RequestOpen>, side: Side, margin: u64, leverage: u16) -> Result<()> {
     let config = &ctx.accounts.config;
     let params = &config.params;
@@ -162,6 +191,9 @@ pub fn handle_request_open(ctx: Context<RequestOpen>, side: Side, margin: u64, l
     require!(ctx.accounts.user.can_trade(&ctx.accounts.authority.key(), now), PerpError::Unauthorized);
     require!(leverage >= 1 && leverage <= params.max_leverage, PerpError::InvalidLeverage);
     require!(margin >= params.min_margin, PerpError::MarginTooSmall);
+    let notional = margin.checked_mul(leverage as u64).ok_or(PerpError::MathOverflow)?;
+    require!(fits_caps(&ctx.accounts.vault, &ctx.accounts.market, side, notional, params), PerpError::OpenInterestCap);
+    reserve(&mut ctx.accounts.vault, &mut ctx.accounts.market, side, notional)?;
 
     let user = &mut ctx.accounts.user;
     user.balance = user.balance.checked_sub(margin).ok_or(PerpError::InsufficientBalance)?;
@@ -251,9 +283,9 @@ pub struct ExecuteOpen<'info> {
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
     #[account(mut, address = order.market)]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
     #[account(mut, seeds = [USER_SEED, order.owner.as_ref()], bump = user.bump)]
     pub user: Account<'info, UserAccount>,
     #[account(
@@ -287,7 +319,8 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     let (side, margin, leverage) = (order.side, order.margin, order.leverage);
     let notional = margin.checked_mul(leverage as u64).ok_or(PerpError::MathOverflow)?;
 
-    require!(fits_caps(&ctx.accounts.vault, &ctx.accounts.market, side, notional, params), PerpError::OpenInterestCap);
+    // The caps were checked at the request. Even if the vault has shrunk since, the order keeps its room
+    release(&mut ctx.accounts.vault, &mut ctx.accounts.market, side, notional)?;
     let market = &mut ctx.accounts.market;
     observe(market, read.publish_time);
     let oi = match side {
@@ -626,9 +659,9 @@ pub struct CancelOrder<'info> {
         bump = order.bump,
     )]
     pub order: Account<'info, OrderRequest>,
-    #[account(address = order.market)]
+    #[account(mut, address = order.market)]
     pub market: Account<'info, Market>,
-    #[account(seeds = [VAULT_SEED], bump = vault.bump)]
+    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
     /// The order's fill message, as proof that it cannot fill the order
     pub price_update: Account<'info, PriceUpdateV2>,
@@ -639,10 +672,9 @@ pub struct CancelOrder<'info> {
 }
 
 /// Cancels an order that cannot fill: its fill message came more than max_fill_gap_sec after the fill time (a Pyth
-/// outage) or its confidence is too wide; a close order whose position no longer exists; or an open order that the caps
-/// refuse right now. Without that last case such an order would keep its margin locked, and whoever freed the cap later
-/// could fill it at a price long gone. Every other order can only be filled, so cancelling is never a way out of a fill
-/// price the user does not like. An open order's margin comes back.
+/// outage) or its confidence is too wide; or a close order whose position no longer exists. Every other order can only
+/// be filled, so cancelling is never a way out of a fill price the user does not like. An open order's margin and its
+/// room under the caps come back.
 pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
     let params = ctx.accounts.config.params;
     let order = &ctx.accounts.order;
@@ -654,11 +686,11 @@ pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
         let open_leverage = is_open.then_some(order.leverage);
         let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
         require_fill_message(&read, order.fill_at)?;
-        let notional = order.margin.saturating_mul(order.leverage as u64);
-        let refused = is_open && !fits_caps(&ctx.accounts.vault, &ctx.accounts.market, order.side, notional, &params);
-        require!(refused || !fillable(&read, order.fill_at, open_leverage, &params), PerpError::OrderFillable);
+        require!(!fillable(&read, order.fill_at, open_leverage, &params), PerpError::OrderFillable);
     }
-    if order.kind == OrderKind::Open {
+    if is_open {
+        let notional = order.margin.checked_mul(order.leverage as u64).ok_or(PerpError::MathOverflow)?;
+        release(&mut ctx.accounts.vault, &mut ctx.accounts.market, order.side, notional)?;
         let user = &mut ctx.accounts.user;
         user.reserved = user.reserved.checked_sub(order.margin).ok_or(PerpError::MathOverflow)?;
         user.balance = user.balance.checked_add(order.margin).ok_or(PerpError::MathOverflow)?;

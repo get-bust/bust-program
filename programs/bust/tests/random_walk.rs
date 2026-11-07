@@ -67,7 +67,7 @@ fn expected(res: Result<(), String>, names: &[&str]) -> bool {
 }
 
 const REQUEST: &[&str] = &["OpenInterestCap", "InsufficientBalance", "MarginTooSmall"];
-const FILL: &[&str] = &["OpenInterestCap", "PythOutage", "MarginTooSmall"];
+const FILL: &[&str] = &["PythOutage", "MarginTooSmall"];
 const CANCEL: &[&str] = &["OrderFillable"];
 
 struct Walk {
@@ -180,6 +180,14 @@ impl Walk {
         assert_eq!((market.oi_long, market.oi_short), (side_sum(Side::Long), side_sum(Side::Short)), "market oi");
         assert_eq!((v.oi_long_total, v.oi_short_total), (market.oi_long, market.oi_short), "total oi");
         assert_eq!(open.iter().map(|p| p.margin).sum::<u64>(), v.open_margin, "open margin");
+
+        let waiting: Vec<bust::OrderRequest> = self.orders.iter().map(|k| e.account(k)).collect();
+        let pending = |side: Side| {
+            let opens = waiting.iter().filter(|o| o.kind == bust::OrderKind::Open && o.side == side);
+            opens.map(|o| o.margin * o.leverage as u64).sum::<u64>()
+        };
+        assert_eq!((market.pending_long, market.pending_short), (pending(Side::Long), pending(Side::Short)), "market pending");
+        assert_eq!((v.pending_long_total, v.pending_short_total), (market.pending_long, market.pending_short), "total pending");
 
         let pool: bust::StakePool = e.account(&stake_pool());
         let stakes: Vec<bust::StakeAccount> = self.stakers.iter().map(|s| e.account(&stake_pda(&s.kp.pubkey()))).collect();
