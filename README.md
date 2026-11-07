@@ -312,7 +312,8 @@ burn 40% · stakers 30% · xBUST 15% · developer 15% (rounding remainder to the
   will be paid out of it. Each market keeps `Σ notional / entry` per side next to its open interest, so a
   side's unrealised PnL at any price is one formula (`p · Σ(n/e) − Σn` for longs). `distribute` must be given
   every market and a price for each no older than 5 s, or it fails; it adds up the sides that are up (before haircuts, and without netting the sides that
-  are down, so it is an upper bound) and holds that back from the profit.
+  are down, so it is an upper bound) and holds that back from the profit. A price older than the
+  newest the market has seen is refused, so the caller cannot pick the message that shows the least open profit.
 - **High-water mark.** Profit is only what vault cash gained since the last distribution. A losing stretch has
   to be won back before anything is paid out. `seed_vault` and LaunchLab fees raise the mark by what they add,
   so capital put in is never distributed as profit.

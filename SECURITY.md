@@ -33,6 +33,9 @@ or the buyback wallet to act against users. Those are trust assumptions, describ
   price published by Pyth would be used.
 - **Keepers are needed for liveness, not for safety.** Anyone can fill, cancel and liquidate, but if nobody does,
   orders wait and bust positions stay open while the vault carries the loss.
+- **A distribution's price is only as fresh as the market's clock.** The caller of `distribute` cannot go below the
+  newest publish time the market has seen, but can choose among messages newer than that. Keepers observe every
+  second, so that leaves about a second of choice, and the open profit held back can differ by that second's move.
 - **Dust.** If everyone unstakes while rewards are streaming, that stretch of rewards stays in the staker bucket.
 
 ## Past findings
@@ -48,6 +51,7 @@ Found by the internal reviews and the random walk.
 | 2026-10-30 | Medium | Capital put in could have counted as profit | Prevented: `usdc_launch_fees_enter_the_vault_as_capital` |
 | 2026-10-30 | Medium | New xBUST was opened at 1:1 instead of the current rate | Fixed |
 | 2026-10-30 | Low | The same account could be passed twice as writable in `sweep_launch_fees` | Fixed |
+| 2026-11-07 | Medium | The caller of `distribute` could pick the message within the 5 s age limit that showed the least open profit, so profit that traders were sitting on could be distributed | Fixed: `a_distribution_cannot_reach_back_for_a_price_that_hides_open_profit` |
 | 2026-11-07 | High | An open order refused by a cap kept a valid fill price, so its owner could free the cap once the price had moved and fill at the old price. Found by the random walk | Fixed: `a_cap_is_never_a_way_to_hold_an_old_fill_price` |
 
 ## Before mainnet

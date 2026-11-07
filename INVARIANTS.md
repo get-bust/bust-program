@@ -36,6 +36,7 @@ which shows the rule held in the cases that ran, not in all cases. See [What is 
 | O5 | A price must be of the market's feed, owned by Pyth, and verified by enough signatures | `a_fill_cannot_use_another_feeds_price`, `a_fill_cannot_use_a_price_account_pyth_does_not_own`, `partial_verification_needs_enough_signatures` |
 | O6 | The market's publish time only moves forward, so a lagging clock gives away no fill price | `fills_and_liquidations_move_the_market_clock_forward_only`, `a_lagging_chain_clock_does_not_give_away_the_fill_price` |
 | O7 | An order fills once | `an_order_fills_once_and_a_filled_order_cannot_be_cancelled` |
+| O8 | An open fills only if confidence / price × leverage ≤ 25% of the margin | `high_leverage_needs_a_tight_confidence_interval` |
 
 ## Open interest
 
@@ -78,11 +79,17 @@ vault was larger. This is the price of I2.
 | D1 | The split hands out exactly the pool | Kani `the_split_hands_out_exactly_the_pool`, Proptest `the_split_adds_up_to_the_pool` |
 | D2 | Nothing is distributed until the queue is empty and past the high-water mark | `distribute_waits_for_empty_queue`, `high_water_mark_blocks_profit_until_recovered` |
 | D3 | Profit that open positions are sitting on is not distributed | `profit_open_positions_are_up_is_not_distributed` |
+| D3a | The caller of `distribute` cannot give a price older than the newest the market has seen | `a_distribution_cannot_reach_back_for_a_price_that_hides_open_profit` |
 | D4 | Capital put in is never distributed as profit | `distribute_splits_fees_and_profit`, `usdc_launch_fees_enter_the_vault_as_capital` |
-| D5 | Buckets pay only registered wallets | `buckets_go_only_to_registered_wallets` |
+| D5 | Buckets pay only registered wallets, and the staker bucket never leaves through `withdraw_bucket` | `buckets_go_only_to_registered_wallets` |
 | D6 | Stake tokens back every stake, and the staker bucket covers every reward earned | Walk |
 | D7 | xBUST never loses backing: a convert or a funding cannot lower the $BUST behind each xBUST | Walk, `early_converter_cannot_take_unclaimed_xbust_backing` |
 | D8 | Σ epoch loss records = `epoch_loss` | Walk, `random_operations_keep_every_ledger_balanced` |
+| D9 | Utilisation is weighted by time: sampling the same moment many times adds no weight | `a_brief_spike_does_not_move_the_vault_share` |
+| D10 | `record_utilization` refuses a market list that is incomplete or out of order | `utilization_needs_every_market_in_order`, `record_utilization_rejects_fake_market` |
+| D11 | Staking just before a distribution and leaving just after earns next to nothing | `staking_around_a_distribution_earns_next_to_nothing`, `late_staker_earns_only_while_staked` |
+| D12 | xBUST claims never pass the epoch's pool | Walk, `xbust_is_shared_by_net_loss` |
+| D13 | xBUST is minted only to the loser | `only_buyback_authority_funds_and_claims_go_to_the_loser` |
 
 ## Authority
 
@@ -94,6 +101,8 @@ vault was larger. This is the price of I2.
 | A4 | Only the admin configures, and params stay within validated bounds | `only_admin_updates_config`, `config_rejects_invalid_params` |
 | A5 | Rent goes back only to whoever paid it | `rent_goes_back_only_to_whoever_paid_it` |
 | A6 | Nothing initialises twice | `nothing_initialises_twice`, `initialize_runs_once` |
+| A7 | LaunchLab accepts only the two Raydium program ids | `launch_config_only_accepts_raydium_launchlab` |
+| A8 | Pause locks no funds: close, liquidate and withdraw work while paused | `pause_locks_no_funds`, `pause_stops_new_positions_only` |
 
 ## What is not covered
 
