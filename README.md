@@ -22,6 +22,7 @@ profit shared between $BUST stakers, a buyback, and the traders who lost.
 - [Epoch distribution](#epoch-distribution)
 - [$BUST staking](#bust-staking)
 - [xBUST](#xbust)
+- [Tokens](#tokens)
 - [LaunchLab platform fees](#launchlab-platform-fees)
 - [Economics](#economics)
 - [Ledger invariants](#ledger-invariants)
@@ -367,6 +368,20 @@ xBUST is the losers' share of each epoch.
 `unclaimed` is part of the rate so that an early converter cannot take the backing of losers who have not
 claimed yet. New rights open at the current rate so that new losers do not share the surplus that sellers left
 to those who wait.
+
+## Tokens
+
+| Token | Created by | Who can mint | Supply |
+|---|---|---|---|
+| USDC | Circle | not this program | deposits and withdrawals only move it |
+| $BUST | Raydium LaunchLab, at launch | not this program, which has no mint authority over it | fixed at launch, then only falls through the buyback burn |
+| xBUST | `init_treasury` | only the `Treasury` PDA, in `claim_xbust`, and only to the loser's account | grows with each funded epoch, falls when it is locked or burned |
+
+$BUST's supply is set by LaunchLab when the pool is created. The SDK's starting parameters are 1,000,000,000 tokens at
+6 decimals, 793,100,000 of them sold on the curve. Check the live values when launching.
+
+On devnet the USDC and $BUST mints are test tokens made by `program/scripts/setup-devnet.ts` in the app repository,
+and their mint authorities are the relayer and the deployer. Nothing on mainnet works that way.
 
 ## LaunchLab platform fees
 
