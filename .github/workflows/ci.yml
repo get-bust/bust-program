@@ -40,7 +40,7 @@ jobs:
         run: |
           touch programs/bust/src/lib.rs
           cargo build-sbf 2>&1 | tee build.log
-          if grep -E "Stack offset|exceeded max offset|stack frame" build.log; then
+          if grep -E "Stack offset|exceeded max offset|stack frame|frame space|large stack variables" build.log; then
             echo "::error::a function overflows the SBF stack"
             exit 1
           fi
