@@ -117,6 +117,10 @@ works while the program is paused.
 Some exchanges refuse to withdraw to a token account whose owner is a PDA; for those, the token account
 address itself is the one to give.
 
+**A client must create that token account before it shows the address.** An exchange or wallet sending to an
+address with no account behind it treats it as an empty wallet and opens a token account for it, which nobody can
+sign for, so the funds would be stuck. The relayer creates it when the user first opens the deposit screen.
+
 ## Trading
 
 ### Two-step orders
