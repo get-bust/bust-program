@@ -112,3 +112,35 @@ fn pause_stops_new_positions_only() {
     env.send(&[unpause], &[&admin]).unwrap();
     env.open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
 }
+
+#[test]
+fn pause_locks_no_funds() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    let closing = env.open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
+    let later = env.open(&owner, &t.kp, Side::Long, usdc(10.0), 10).unwrap();
+    let busting = env.open(&owner, &t.kp, Side::Long, usdc(10.0), 100).unwrap();
+    let waiting = env.request_close(&closing, &t.kp).unwrap();
+
+    let admin = env.admin.insecure_clone();
+    let pause = env.admin_ix(bust::instruction::SetPaused { paused: true }.data());
+    env.send(&[pause], &[&admin]).unwrap();
+
+    // A close requested before the pause fills, and so does one requested during it
+    env.advance_to_fill();
+    env.execute_close(&waiting).unwrap();
+    env.close_at(&later, &t.kp, 100.0).unwrap();
+    env.set_price(90.0);
+    env.liquidate(&busting).unwrap();
+
+    let u = env.user_state(&owner);
+    assert_eq!(u.reserved, 0);
+    let before = env.token_balance(&t.tokens);
+    let ix = env.deposit_ix(&t, u.balance, false);
+    env.send(&[ix], &[&t.kp]).unwrap();
+    assert_eq!(env.token_balance(&t.tokens), before + u.balance);
+    assert_eq!(env.user_state(&owner).balance, 0);
+    env.assert_invariant();
+}

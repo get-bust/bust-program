@@ -199,3 +199,26 @@ fn orphaned_reward_is_burned_when_nobody_is_staked_at_the_next_distribution() {
     assert!(d.burn_usdc >= burn_before + (pot - ga) - 2);
     env.assert_invariant();
 }
+
+#[test]
+fn staking_around_a_distribution_earns_next_to_nothing() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let patient = env.staker(bust_units(100));
+    let quick = env.staker(bust_units(100));
+    env.stake(&patient, bust_units(100)).unwrap();
+    env.stake(&quick, bust_units(100)).unwrap(); // just in time, and as large as the one who stayed
+    let pot = fund_stakers(&mut env);
+
+    // Out one second after the reward starts to stream
+    env.set_time(env.now + 1);
+    env.request_unstake(&quick, bust_units(100)).unwrap();
+    env.claim(&quick).unwrap();
+    let got = claimed(&env, &quick);
+    assert!(got <= pot / DistParams::DEFAULT.epoch_sec as u64, "one second of the stream at most: {got} of {pot}");
+
+    env.set_time(env.now + DistParams::DEFAULT.epoch_sec);
+    env.claim(&patient).unwrap();
+    assert!(claimed(&env, &patient) > pot * 99 / 100, "the rest goes to who stayed");
+    env.assert_invariant();
+}

@@ -284,6 +284,8 @@ impl Walk {
                 expected(self.env.claim_xbust(&o, epoch, dest), &["ZeroAmount"]);
             }
         }
+        let record: bust::EpochRecord = self.env.account(&epoch_pda(epoch));
+        assert!(record.claimed <= record.pool, "xBUST claimed past the pool");
     }
 
     fn step(&mut self, op: usize) -> bool {
