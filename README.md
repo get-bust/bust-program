@@ -2,7 +2,7 @@
   <img src="assets/logo.png" alt="Bust" width="120">
 </p>
 
-<h1 align="center">bust-program</h1>
+<h1 align="center">Bust</h1>
 
 <p align="center">
   <a href="https://github.com/get-bust/bust-program/actions/workflows/ci.yml"><img src="https://github.com/get-bust/bust-program/actions/workflows/ci.yml/badge.svg?branch=main" alt="ci"></a>
