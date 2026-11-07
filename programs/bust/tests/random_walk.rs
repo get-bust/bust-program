@@ -5,6 +5,7 @@
 //! - every USDC ever minted is accounted for, across the vault and every wallet
 //! - the vault's and the distributor's ledgers match the tokens and the sum of the accounts behind them
 //! - open interest equals the sum of the open positions, per market and per side
+//! - pending notional equals the sum of the waiting open orders, per market and per side
 //! - stake tokens back every stake, and the staker bucket covers every reward earned
 //! - xBUST never loses backing: a convert or a funding cannot lower the $BUST behind each xBUST
 //!
