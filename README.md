@@ -131,10 +131,10 @@ sequenceDiagram
     participant K as Keeper (anyone)
     participant H as Pyth (Hermes)
     U->>P: request_open(side, margin, leverage)
-    Note over P: margin: balance → reserved<br/>OrderRequest stores requested_at
+    Note over P: OI caps, notional reserved<br/>margin: balance → reserved<br/>OrderRequest stores requested_at
     K->>H: the first update at T (fixed at request)
     K->>P: execute_open(order, price update)
-    Note over P: publish_time ≥ T and prev_publish_time < T<br/>OI cap, bust price, open Position
+    Note over P: publish_time ≥ T and prev_publish_time < T<br/>bust price, open Position
     U->>P: request_close(position)
     K->>P: execute_close(order, price update)
     Note over P: same rule, settle, close Position,<br/>update the user's EpochLoss
@@ -159,9 +159,7 @@ sequenceDiagram
   proof that it cannot fill the order: it came more than `max_fill_gap_sec` (10 s) after `T`, meaning Pyth was
   down, or its confidence is too wide (below). Otherwise the order can only be filled. Whether an order fills or
   cancels is never a choice, so waiting for nobody to fill and cancelling is not a way out of a bad price. A
-  close order whose position was liquidated in the meantime cancels without a price. An open order the caps
-  refuse at its fill cancels as well: left waiting it would keep its margin locked, and whoever freed the cap
-  later could fill it at a price long gone. Keepers cancel such an order as soon as the fill is refused.
+  close order whose position was liquidated in the meantime cancels without a price.
 - Fill prices need at least 3 verified Wormhole signatures under partial verification and a confidence interval
   within 0.2% of the price. **An open** must also be within a quarter of what its margin covers:
   `conf / price × leverage ≤ 25%`, so at 1000×, where the margin covers a 10 bps move, at most 2.5 bps of
@@ -201,12 +199,20 @@ is constrained so there is nothing to pick:
 
 ### Open interest cap
 
-At fill time two caps apply, each computed on the net vault (cash minus queued debt):
+When an order is requested two caps apply, each computed on the net vault (cash minus queued debt):
 
 ```
-per market and side:   OI on that side + new notional ≤ max(net vault × 0.6, oi_floor)
-over all markets:      Σ OI on that side + new notional ≤ max(net vault × 0.6, oi_total_floor)
+per market and side:   OI + pending on that side + new notional ≤ max(net vault × 0.6, oi_floor)
+over all markets:      Σ OI + Σ pending on that side + new notional ≤ max(net vault × 0.6, oi_total_floor)
 ```
+
+- **The notional is reserved at the request**, and a fill or a cancel releases it. An order past a cap is refused
+  on the spot, and an order that passes is never refused for its size later. Checked at the fill instead, a refused
+  order would wait with its fill price still valid: its owner could watch the price, free the cap once the order
+  was in profit, and fill at the old price. So a fill does not look at the caps again: if the vault shrinks in the
+  seconds between the two, the order still fills, and open interest can pass the cap by what was already reserved.
+- **Pending notional is not open interest.** It has no entry price yet, so it carries no PnL and does not count in
+  `record_utilization`.
 
 - **The total cap** exists because the markets move together. With only per-market caps, longs on BTC, ETH and
   SOL could each reach 0.6 of the vault, 1.8× the vault on one side in a market-wide move.
