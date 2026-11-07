@@ -147,6 +147,8 @@ fn unrealized_profit<'info>(infos: &'info [AccountInfo<'info>], config: &Config)
     for (market, info) in markets.iter().zip(&infos[n..]) {
         let update: Account<PriceUpdateV2> = Account::try_from(info)?;
         let read = read_price(&update, &market.feed_id, &config.params, config.params.max_price_age_sec)?;
+        // Within the age limit a caller could otherwise pick the older message that shows the least open profit
+        require!(read.publish_time >= market.last_publish_time, PerpError::PriceTooOld);
         for (side, oi, units) in
             [(Side::Long, market.oi_long, market.long_units), (Side::Short, market.oi_short, market.short_units)]
         {

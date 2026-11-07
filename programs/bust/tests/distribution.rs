@@ -318,3 +318,27 @@ fn distribution_needs_every_market_and_a_fresh_price() {
     env.set_price(100.0);
     env.distribute_with(&[price]).unwrap();
 }
+
+#[test]
+fn a_distribution_cannot_reach_back_for_a_price_that_hides_open_profit() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    losing_trade(&mut env);
+    let winner = env.trader(usdc(1_000.0));
+    let w = winner.kp.pubkey();
+    env.open(&w, &winner.kp, Side::Long, usdc(100.0), 10).unwrap();
+    env.next_epoch();
+    env.set_price(env.last_price * 1.03);
+    let up = env.last_price;
+    let (market, price) = (env.market, env.price);
+    env.observe_price(market, price).unwrap();
+
+    // Three seconds ago the long was not up. That message is still within the age limit, but the market has seen newer
+    let now = env.now;
+    env.set_price_full(up / 1.03, 0.01, now - 3);
+    expect_err(env.distribute(), "PriceTooOld");
+
+    env.set_price(up);
+    env.distribute().unwrap();
+    env.assert_invariant();
+}
