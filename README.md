@@ -1,5 +1,8 @@
 # bust-program
 
+[![ci](https://github.com/get-bust/bust-program/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/get-bust/bust-program/actions/workflows/ci.yml)
+[![random](https://github.com/get-bust/bust-program/actions/workflows/random.yml/badge.svg?branch=main)](https://github.com/get-bust/bust-program/actions/workflows/random.yml)
+
 The Solana program behind Bust: leveraged perpetuals traded against a single USDC vault, with the vault's
 profit shared between $BUST stakers, a buyback, and the traders who lost.
 
