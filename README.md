@@ -545,6 +545,11 @@ solana-verify verify-from-repo -u <cluster> --program-id <program id> \
   https://github.com/get-bust/bust-program --commit-hash <commit> --library-name bust
 ```
 
+## Security
+
+[SECURITY.md](SECURITY.md) has the audit status, how to report a vulnerability, the known limits and past findings.
+[INVARIANTS.md](INVARIANTS.md) lists the rules the program must keep and what checks each one.
+
 ## License
 
 Business Source License 1.1. See [LICENSE](LICENSE).
