@@ -225,10 +225,10 @@ over all markets:      Σ OI + Σ pending on that side + new notional ≤ max(ne
   settlement rules give it an edge, so it fills by being traded against; a cap tied only to the vault would
   keep a new vault empty and stop an indebted one from earning its way back.
 - **The floors bound exposure at any moment, not debt.** Positions that close and reopen can keep adding to the
-  queue. So past `max_debt` (15,000 USDC) of queued debt the floors shrink in proportion, `floor × max_debt /
+  queue. So past `max_debt` (60,000 USDC) of queued debt the floors shrink in proportion, `floor × max_debt /
   debt`: trading never stops, but the more the vault owes, the smaller the risk it takes on and the more slowly
   the debt can grow. As the debt is paid down the floors grow back, and they are whole again under `max_debt`.
-- **Growing with the vault:** once 0.6 × the net vault passes a floor (about 42,000 USDC per market), the cap
+- **Growing with the vault:** once 0.6 × the net vault passes a floor (about 167,000 USDC per market), the cap
   follows the vault and the floor no longer matters; it is only there while the vault is small or in debt.
 - **How an indebted vault recovers:** losses on open positions and on new positions within the floors, LaunchLab
   fees and any seeded capital all become cash, and `harvest` hands it to the queue. A client should tell a user
@@ -410,18 +410,21 @@ these are its results at the default parameters.
 and the bust buffer. At high leverage that is a large share of margin: a 1000× trader holding 15 minutes loses
 about a third of the margin per trade on average.
 
-**Floors and debt** (a year of hourly candles, starting from an empty vault, floors of 25,000 USDC per market
-and 50,000 in total):
+**Floors and debt** (a year of hourly candles, starting from an empty vault, floors of 100,000 USDC per market
+and 200,000 in total):
 
 | trader behaviour | worst debt in 24 h | 72 h | 7 days | 30 days |
 |---|---|---|---|---|
-| knows each window's direction in advance and holds the floors | 7,220 | 13,654 | 15,535 | 20,061 |
-| momentum: trades the last hour's direction on the two busiest markets | 5,940 | 7,554 | 8,879 | 11,285 |
-| random flow: 20 traders an hour at 10×, 100× and 500× | 981 | 993 | 993 | 993 |
+| knows each window's direction in advance and holds the floors | 28,882 | 54,614 | 62,139 | 80,245 |
+| momentum: trades the last hour's direction on the two busiest markets | 23,758 | 30,215 | 35,517 | 45,138 |
+| random flow: 20 traders an hour at 10×, 100× and 500× | 3,923 | 3,972 | 3,972 | 3,972 |
 
-The vault ends the year about 73,000 USDC up from random flow, and 114,000 up against the momentum trader: the
-haircuts make trend following lose too. `max_debt` sits at 15,000, about the worst 72 hours of the first row,
-which no realistic flow reaches.
+The vault ends the year about 290,000 USDC up from random flow, and 457,000 up against the momentum trader: the
+haircuts make trend following lose too. `max_debt` sits at 60,000, about the worst 72 hours of the first row,
+and nothing in this year reaches it. The crisis months in `sim/` do: on minute candles in March 2020 a momentum
+trader at 10× reaches about 75,000 within a day and 87,000 within the month with the brake, 90,000 without it.
+The random flow here is half the total floor an hour, 100,000 USDC, so the profit moves with it: at less volume
+the vault earns less, and a debt of the same size takes longer to repay.
 
 **Hedged xBUST farming.** Two accounts open a long and a short together; the losing one earns xBUST for its
 loss and the winning one keeps its haircut profit. Over two weeks of minute candles, the cheapest way to do it
@@ -508,7 +511,7 @@ Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change 
 | Holdback band | 0.75 – 6 bps |
 | Impact base / rate / reference notional | 10% / 15,000 / $100,000 |
 | OI cap | max(0.6 × net vault, floor) per market and side, and over all markets per side |
-| OI floors | 25,000 USDC per market and side, 50,000 USDC over all markets; past 15,000 USDC of debt, × 15,000 / debt |
+| OI floors | 100,000 USDC per market and side, 200,000 USDC over all markets; past 60,000 USDC of debt, × 60,000 / debt |
 | Minimum deposit sweep | 1 USDC |
 | Max price age / confidence | 5 s / 0.2%, and on opens at most 25% of the margin's move (2.5 bps at 1000×) |
 | Min Pyth signatures | 3 |

@@ -173,7 +173,7 @@ fn edge(m: &Markets) {
 
 // ---------- debt under the floors
 
-const FLOOR: f64 = 25_000.0;
+const FLOOR: f64 = Params::DEFAULT.oi_floor as f64 / 1e6;
 const MARKETS_AT_FLOOR: usize = 2; // the total floor fills two markets
 const WINDOWS: [(usize, &str); 4] = [(1440, "24 h"), (4320, "72 h"), (10080, "7 days"), (43200, "30 days")];
 
@@ -242,7 +242,7 @@ fn momentum_debt(m: &Markets, step: usize, leverage: u16, brake: bool) -> Vec<f6
     worst
 }
 
-/// Each minute, four traders open about 1,235 USDC between them on a random market and side, at 10× to 1000×, for
+/// Each minute, four traders open about 4,940 USDC between them on a random market and side, at 10× to 1000×, for
 /// 1 to 60 minutes: about half the total floor open on average
 fn random_path(m: &Markets, seed: u64) -> Vec<f64> {
     let mut s = seed;
@@ -256,7 +256,7 @@ fn random_path(m: &Markets, seed: u64) -> Vec<f64> {
     let mut path = Vec::with_capacity(n);
     for i in 0..n {
         for &(k, from, hold, side, leverage) in &due[i] {
-            equity += m.trade(k, from, hold, side, 1_235.0 / 4.0, leverage, equity < 0.0).vault;
+            equity += m.trade(k, from, hold, side, 4_940.0 / 4.0, leverage, equity < 0.0).vault;
         }
         path.push(equity);
         for _ in 0..4 {
@@ -272,7 +272,9 @@ fn random_path(m: &Markets, seed: u64) -> Vec<f64> {
 fn debt(m: &Markets, title: &str) {
     println!("\n## Debt under the floors: {title}\n");
     println!(
-        "From an empty vault, floors of 25,000 USDC per market and 50,000 in total, worst debt within each window (USDC).\n"
+        "From an empty vault, floors of {} USDC per market and {} in total, worst debt within each window (USDC).\n",
+        usd(FLOOR),
+        usd(FLOOR * MARKETS_AT_FLOOR as f64)
     );
     println!("| trader | {} |", WINDOWS.map(|w| w.1).join(" | "));
     println!("|---|{}|", WINDOWS.map(|_| "---").join("|"));
