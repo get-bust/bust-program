@@ -51,7 +51,7 @@ flowchart LR
     D -- 40% --> B[Buyback wallet, USDC:<br/>buys & burns $BUST off chain]
     D -- 15% --> X[Buyback wallet, USDC:<br/>buys $BUST for xBUST]
     D -- 30% --> S[$BUST stakers<br/>streamed in USDC]
-    D -- 15% --> DEV[Developer]
+    D -- 15% --> DEV[Operations]
     X -- fund_epoch --> TR[(xBUST treasury<br/>$BUST)]
     TR -- "xBUST, pro rata<br/>to net loss" --> L[That epoch's losers]
 ```
@@ -310,7 +310,7 @@ profit    = vault cash − high-water mark − what open positions are up
 keep      = clamp(highest daily average utilisation over the last 7 days, 20%, 80%)
 from_cash = profit × (1 − keep)
 pool      = from_cash + accrued fees
-burn 40% · stakers 30% · xBUST 15% · developer 15% (rounding remainder to the developer)
+burn 40% · stakers 30% · xBUST 15% · operations 15% (rounding remainder to operations)
 ```
 
 - **Open positions.** Cash the vault holds is not all profit while traders are up on open positions: those wins
@@ -329,8 +329,8 @@ burn 40% · stakers 30% · xBUST 15% · developer 15% (rounding remainder to the
   when it is recorded until the next one, and each day keeps the integral, so a day's figure is a time-weighted
   average: opening a huge position for a few seconds and sampling it many times weighs only those seconds.
 - **The money stays put.** The shares are ledger entries; the USDC stays in the vault token account until it is
-  withdrawn. The burn and xBUST shares can only go to the registered buyback wallet and the developer share
-  only to the registered developer wallet. The staker share never leaves through `withdraw_bucket`.
+  withdrawn. The burn and xBUST shares can only go to the registered buyback wallet and the operations share
+  (`dev` in the code) only to the registered operations wallet. The staker share never leaves through `withdraw_bucket`.
 - The closing epoch's total net loss is frozen into an `EpochRecord` for xBUST.
 
 ## $BUST staking
@@ -480,7 +480,7 @@ Within the program as written:
 | Party | Can | Cannot |
 |---|---|---|
 | Upgrade authority | everything (see above) | |
-| Admin | change parameters and distribution shares within validated bounds; change the registered buyback, developer and swap wallets, and so where future shares go; pause new positions; add markets | withdraw user balances, vault cash or shares already distributed to someone else; register a launchpad other than Raydium LaunchLab |
+| Admin | change parameters and distribution shares within validated bounds; change the registered buyback, operations and swap wallets, and so where future shares go; pause new positions; add markets | withdraw user balances, vault cash or shares already distributed to someone else; register a launchpad other than Raydium LaunchLab |
 | Buyback authority | receive the burn and xBUST shares in USDC; fund epochs, or fund them less than the xBUST share, or not at all | mint xBUST or take $BUST out of the treasury |
 | Keepers | fill orders, liquidate bust positions, run the permissionless instructions | choose a fill price, liquidate a healthy position, or move funds between users |
 | Session key | open and close positions for its owner until it expires | withdraw, stake, lock or change the session |
@@ -519,7 +519,7 @@ Defaults from `Params::DEFAULT` and `DistParams::DEFAULT`; the admin can change 
 | Max session | 30 days |
 | Epoch | 1 day |
 | Vault share of profit | 20% – 80%, by the highest daily average utilisation of the last 7 days |
-| Shares | 40% burn, 30% stakers, 15% xBUST, 15% developer |
+| Shares | 40% burn, 30% stakers, 15% xBUST, 15% operations |
 
 The unstake period and the xBUST unlock period are set when the stake pool and treasury are created (the
 tests use 7 and 30 days).
