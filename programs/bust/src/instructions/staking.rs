@@ -1,5 +1,8 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
+use anchor_spl::{
+    token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked},
+    token_interface::{self, TokenInterface},
+};
 
 use crate::{
     constants::*,
@@ -16,7 +19,9 @@ pub struct InitStakePool<'info> {
     pub admin: Signer<'info>,
     #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = admin)]
     pub config: Account<'info, Config>,
-    pub bust_mint: Account<'info, Mint>,
+    /// SPL Token or Token-2022, whichever $BUST was minted with
+    #[account(mint::token_program = token_program)]
+    pub bust_mint: InterfaceAccount<'info, token_interface::Mint>,
     #[account(init, payer = admin, space = 8 + StakePool::INIT_SPACE, seeds = [STAKE_POOL_SEED], bump)]
     pub stake_pool: Account<'info, StakePool>,
     #[account(
@@ -26,9 +31,11 @@ pub struct InitStakePool<'info> {
         bump,
         token::mint = bust_mint,
         token::authority = stake_pool,
+        token::token_program = token_program,
     )]
-    pub stake_tokens: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub stake_tokens: InterfaceAccount<'info, token_interface::TokenAccount>,
+    /// $BUST's token program
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -89,13 +96,15 @@ pub struct MoveStake<'info> {
     #[account(mut, seeds = [STAKE_POOL_SEED], bump = stake_pool.bump, has_one = bust_mint)]
     pub stake_pool: Account<'info, StakePool>,
     #[account(mut, seeds = [STAKE_TOKENS_SEED], bump = stake_pool.tokens_bump)]
-    pub stake_tokens: Account<'info, TokenAccount>,
+    pub stake_tokens: InterfaceAccount<'info, token_interface::TokenAccount>,
     #[account(mut, seeds = [STAKE_SEED, owner.key().as_ref()], bump = stake_account.bump, has_one = owner)]
     pub stake_account: Account<'info, StakeAccount>,
-    #[account(mut, token::mint = bust_mint, token::authority = owner)]
-    pub owner_tokens: Account<'info, TokenAccount>,
-    pub bust_mint: Account<'info, Mint>,
-    pub token_program: Program<'info, Token>,
+    #[account(mut, token::mint = bust_mint, token::authority = owner, token::token_program = token_program)]
+    pub owner_tokens: InterfaceAccount<'info, token_interface::TokenAccount>,
+    #[account(mint::token_program = token_program)]
+    pub bust_mint: InterfaceAccount<'info, token_interface::Mint>,
+    /// $BUST's token program: SPL Token or Token-2022
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 fn sync(pool: &mut StakePool, account: &mut StakeAccount) -> Result<()> {
@@ -109,10 +118,10 @@ pub fn handle_stake(ctx: Context<MoveStake>, amount: u64) -> Result<()> {
     let pool = &mut ctx.accounts.stake_pool;
     let account = &mut ctx.accounts.stake_account;
     sync(pool, account)?;
-    transfer_checked(
+    token_interface::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.key(),
-            TransferChecked {
+            token_interface::TransferChecked {
                 from: ctx.accounts.owner_tokens.to_account_info(),
                 mint: ctx.accounts.bust_mint.to_account_info(),
                 to: ctx.accounts.stake_tokens.to_account_info(),
@@ -151,10 +160,10 @@ pub fn handle_withdraw_unstaked(ctx: Context<MoveStake>) -> Result<()> {
 
     let bump = [ctx.accounts.stake_pool.bump];
     let seeds: &[&[&[u8]]] = &[&[STAKE_POOL_SEED, &bump]];
-    transfer_checked(
+    token_interface::transfer_checked(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.key(),
-            TransferChecked {
+            token_interface::TransferChecked {
                 from: ctx.accounts.stake_tokens.to_account_info(),
                 mint: ctx.accounts.bust_mint.to_account_info(),
                 to: ctx.accounts.owner_tokens.to_account_info(),
