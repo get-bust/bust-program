@@ -23,7 +23,7 @@ profit shared between $BUST stakers, a buyback, and the traders who lost.
 - [$BUST staking](#bust-staking)
 - [xBUST](#xbust)
 - [Tokens](#tokens)
-- [LaunchLab platform fees](#launchlab-platform-fees)
+- [$BUST trading fees](#bust-trading-fees)
 - [Economics](#economics)
 - [Ledger invariants](#ledger-invariants)
 - [Trust model](#trust-model)
@@ -46,7 +46,7 @@ Fees and the vault's profit are distributed once per epoch (one day):
 flowchart LR
     T[Traders] -- deposits / margin --> V[(Vault<br/>USDC)]
     V -- wins --> T
-    LL[LaunchLab<br/>platform fees] -- USDC, as capital --> V
+    TF[$BUST<br/>trading fees] -- USDC, as capital --> V
     V -- "fees + profit above<br/>the high-water mark" --> D{Epoch<br/>distribution}
     D -- 40% --> B[Buyback wallet, USDC:<br/>buys & burns $BUST off chain]
     D -- 15% --> X[Buyback wallet, USDC:<br/>buys $BUST for xBUST]
@@ -82,18 +82,18 @@ Every account is a PDA of the program.
 | `EpochRecord` | `epoch`, epoch | an epoch's total net loss and its xBUST pool |
 | `EpochLoss` | `epoch_loss`, owner, epoch | one user's net result in one epoch |
 | `Vest` | `vest`, owner | a user's xBUST lock |
-| `LaunchConfig` | `launch_config` | the LaunchLab program, platform config, quote mint, swap destination |
-| fee wallet | `fee_wallet` | the LaunchLab platform's fee wallet; the program signs for it |
+| `TokenFeeConfig` | `token_fee_config` | the token $BUST trading fees arrive in, and the swap account |
+| fee wallet | `fee_wallet` | where $BUST trading fees are paid; nobody holds a key for it, the program signs for it |
 
 ## Instructions and who can call them
 
 | Caller | Instructions |
 |---|---|
-| Admin | `initialize`, `update_config`, `set_paused`, `add_market`, `init_distributor`, `update_distributor`, `init_stake_pool`, `init_treasury`, `update_treasury`, `migrate_treasury`, `init_launch_config`, `update_launch_config` |
+| Admin | `initialize`, `update_config`, `set_paused`, `add_market`, `init_distributor`, `update_distributor`, `init_stake_pool`, `init_treasury`, `update_treasury`, `migrate_treasury`, `init_token_fee_config`, `update_token_fee_config` |
 | Account owner | `create_user`, `deposit`, `withdraw`, `set_session`, `revoke_session`, `stake`, `request_unstake`, `withdraw_unstaked`, `claim_rewards`, `lock_xbust`, `convert_vested` |
 | Owner or session key | `request_open`, `request_close` |
 | Buyback authority | `fund_epoch` |
-| Anyone (keepers) | `sweep_deposit`, `observe_price`, `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `claim_ticket`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `close_unfunded_loss`, `claim_launch_fees`, `sweep_launch_fees`, `seed_vault` |
+| Anyone (keepers) | `sweep_deposit`, `observe_price`, `execute_open`, `execute_close`, `cancel_order`, `liquidate`, `harvest`, `claim_ticket`, `record_utilization`, `distribute`, `withdraw_bucket`, `claim_xbust`, `close_unfunded_loss`, `sweep_token_fees`, `seed_vault` |
 
 The permissionless instructions cannot move money anywhere the program has not fixed in advance:
 `withdraw_bucket` pays only the registered wallets, `claim_xbust` mints only to the loser's account, and the
@@ -230,7 +230,7 @@ over all markets:      Σ OI + Σ pending on that side + new notional ≤ max(ne
   the debt can grow. As the debt is paid down the floors grow back, and they are whole again under `max_debt`.
 - **Growing with the vault:** once 0.6 × the net vault passes a floor (about 167,000 USDC per market), the cap
   follows the vault and the floor no longer matters; it is only there while the vault is small or in debt.
-- **How an indebted vault recovers:** losses on open positions and on new positions within the floors, LaunchLab
+- **How an indebted vault recovers:** losses on open positions and on new positions within the floors, token
   fees and any seeded capital all become cash, and `harvest` hands it to the queue. A client should tell a user
   opening a position while the vault is in debt that a win will be queued.
 - 0.6 comes from a year of minute data on a single market: at that level the vault lost at most half of itself
@@ -320,7 +320,7 @@ burn 40% · stakers 30% · xBUST 15% · operations 15% (rounding remainder to op
   are down, so it is an upper bound) and holds that back from the profit. A price older than the
   newest the market has seen is refused, so the caller cannot pick the message that shows the least open profit.
 - **High-water mark.** Profit is only what vault cash gained since the last distribution. A losing stretch has
-  to be won back before anything is paid out. `seed_vault` and LaunchLab fees raise the mark by what they add,
+  to be won back before anything is paid out. `seed_vault` and token fees raise the mark by what they add,
   so capital put in is never distributed as profit.
 - **Utilisation.** `record_utilization` samples `max(OI long, OI short) / cap` over every market, and the total
   over all markets against its own cap. It must be given exactly markets `0..market_count` in index order and
@@ -378,27 +378,26 @@ to those who wait.
 | Token | Created by | Who can mint | Supply |
 |---|---|---|---|
 | USDC | Circle | not this program | deposits and withdrawals only move it |
-| $BUST | Raydium LaunchLab, at launch | not this program, which has no mint authority over it | fixed at launch, then only falls through the buyback burn |
+| $BUST | outside this program, once, at launch | not this program, which has no mint authority over it | fixed at launch, then only falls through the buyback burn |
 | xBUST | `init_treasury` | only the `Treasury` PDA, in `claim_xbust`, and only to the loser's account | grows with each funded epoch, falls when it is locked or burned |
 
-$BUST's supply is set by LaunchLab when the pool is created. The SDK's starting parameters are 1,000,000,000 tokens at
-6 decimals, 793,100,000 of them sold on the curve. Check the live values when launching.
+$BUST's supply is set where it launches, and this program cannot change it. The program reads $BUST through the token
+interface, so the mint can be an SPL Token mint or a Token-2022 mint.
 
 On devnet the USDC and $BUST mints are test tokens made by `program/scripts/setup-devnet.ts` in the app repository,
 and their mint authorities are the relayer and the deployer. Nothing on mainnet works that way.
 
-## LaunchLab platform fees
+## $BUST trading fees
 
-$BUST launches from Bust's own Raydium LaunchLab platform, and the platform's fee wallet is the program's
-`fee_wallet` PDA.
+Fees on $BUST trading are paid to the program's `fee_wallet` PDA. Nobody holds a key for it.
 
-- `claim_launch_fees` has LaunchLab pay the platform fee, from one pool or from the platform fee vault, signing
-  as the PDA.
-- That signature would work for any program it was handed to, so the admin can register only the two Raydium
-  LaunchLab program ids (mainnet and devnet).
-- `sweep_launch_fees` moves what was claimed. USDC enters the vault as capital and raises the high-water mark.
-  Any other quote token goes to the registered swap wallet, to be swapped to USDC and seeded back. Nothing else
-  can receive it.
+- `sweep_token_fees` moves what has arrived, and anyone can call it. USDC enters the vault as capital and raises
+  the high-water mark. Any other token goes to the registered swap account, to be swapped to USDC and seeded
+  back. Nothing else can receive it.
+- The fee wallet signs for that transfer and for nothing else. The program makes no call to another program on
+  its behalf.
+- The admin registers the token the fees arrive in and the swap account, and can change both. The fees can be
+  in an SPL Token or a Token-2022 token.
 
 ## Economics
 
@@ -480,7 +479,7 @@ Within the program as written:
 | Party | Can | Cannot |
 |---|---|---|
 | Upgrade authority | everything (see above) | |
-| Admin | change parameters and distribution shares within validated bounds; change the registered buyback, operations and swap wallets, and so where future shares go; pause new positions; add markets | withdraw user balances, vault cash or shares already distributed to someone else; register a launchpad other than Raydium LaunchLab |
+| Admin | change parameters and distribution shares within validated bounds; change the registered buyback, operations and swap wallets, and so where future shares go; pause new positions; add markets | withdraw user balances, vault cash or shares already distributed to someone else |
 | Buyback authority | receive the burn and xBUST shares in USDC; fund epochs, or fund them less than the xBUST share, or not at all | mint xBUST or take $BUST out of the treasury |
 | Keepers | fill orders, liquidate bust positions, run the permissionless instructions | choose a fill price, liquidate a healthy position, or move funds between users |
 | Session key | open and close positions for its owner until it expires | withdraw, stake, lock or change the session |
@@ -547,7 +546,7 @@ programs/bust/src/
   state.rs            accounts and parameters
   math.rs             settlement and distribution math, with unit tests
   proofs.rs           Kani proofs of the math and accounting rules
-  instructions/       admin, user, trade, queue, distribution, staking, xbust, launchlab
+  instructions/       admin, user, trade, queue, distribution, staking, xbust, token_fees
 programs/bust/tests/
   common/mod.rs       LiteSVM harness
   *.rs                one file per module, plus invariants.rs and random_walk.rs (randomised)

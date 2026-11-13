@@ -158,7 +158,7 @@ pub fn handle_sweep_deposit(ctx: Context<SweepDeposit>) -> Result<()> {
     Ok(())
 }
 
-// ---------- seed_vault (LaunchLab fees and donations)
+// ---------- seed_vault (swapped token fees and donations)
 
 #[derive(Accounts)]
 pub struct SeedVault<'info> {

@@ -2,24 +2,22 @@ mod common;
 
 use common::*;
 
-const DEVNET_LAUNCHPAD: Pubkey = anchor_lang::prelude::pubkey!("DRay6fNdQ5J82H7xV6uq2aV3mNrUZ1J4PgSKsWgptcm6");
-
 fn fee_wallet() -> Pubkey {
     pda(&[bust::FEE_WALLET_SEED])
 }
-fn launch_config() -> Pubkey {
-    pda(&[bust::LAUNCH_CONFIG_SEED])
+fn token_fee_config() -> Pubkey {
+    pda(&[bust::TOKEN_FEE_CONFIG_SEED])
 }
 
-fn init_launch(env: &mut Env, program: Pubkey, quote: Pubkey, swap_destination: Pubkey) -> Result<(), String> {
+fn init_fees(env: &mut Env, quote: Pubkey, swap_destination: Pubkey) -> Result<(), String> {
     let admin = env.admin.insecure_clone();
     let ix = Instruction::new_with_bytes(
         bust::id(),
-        &bust::instruction::InitLaunchConfig { launchpad_program: program, platform_config: Pubkey::new_unique() }.data(),
-        bust::accounts::InitLaunchConfig {
+        &bust::instruction::InitTokenFeeConfig {}.data(),
+        bust::accounts::InitTokenFeeConfig {
             admin: admin.pubkey(),
             config: config(),
-            launch_config: launch_config(),
+            token_fee_config: token_fee_config(),
             quote_mint: quote,
             swap_destination,
             system_program: system_program::ID,
@@ -43,13 +41,13 @@ fn sweep_with(
     let c = env.caller();
     let ix = Instruction::new_with_bytes(
         bust::id(),
-        &bust::instruction::SweepLaunchFees {}.data(),
-        bust::accounts::SweepLaunchFees {
+        &bust::instruction::SweepTokenFees {}.data(),
+        bust::accounts::SweepTokenFees {
             config: config(),
             vault: vault(),
             vault_tokens: vault_tokens(),
             distributor: distributor(),
-            launch_config: launch_config(),
+            token_fee_config: token_fee_config(),
             fee_wallet: fee_wallet(),
             source,
             quote_mint: quote,
@@ -63,20 +61,35 @@ fn sweep_with(
 }
 
 #[test]
-fn launch_config_only_accepts_raydium_launchlab() {
+fn only_the_admin_opens_the_fee_config_and_only_once() {
     let mut env = Env::new();
     let (mint, dest) = (env.mint, env.buyback_tokens);
-    expect_err(init_launch(&mut env, Pubkey::new_unique(), mint, dest), "InvalidConfig");
-    init_launch(&mut env, DEVNET_LAUNCHPAD, mint, dest).unwrap();
+    let attacker = env.caller();
+    let ix = Instruction::new_with_bytes(
+        bust::id(),
+        &bust::instruction::InitTokenFeeConfig {}.data(),
+        bust::accounts::InitTokenFeeConfig {
+            admin: attacker.pubkey(),
+            config: config(),
+            token_fee_config: token_fee_config(),
+            quote_mint: mint,
+            swap_destination: dest,
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None),
+    );
+    expect_err(env.send(&[ix], &[&attacker]), "ConstraintHasOne");
+    init_fees(&mut env, mint, dest).unwrap();
+    assert!(init_fees(&mut env, mint, dest).is_err());
 }
 
 #[test]
-fn usdc_launch_fees_enter_the_vault_as_capital() {
+fn usdc_token_fees_enter_the_vault_as_capital() {
     let mut env = Env::new();
     env.seed(usdc(25_000.0));
     let (mint, dest) = (env.mint, env.buyback_tokens);
-    init_launch(&mut env, DEVNET_LAUNCHPAD, mint, dest).unwrap();
-    // Stand in for LaunchLab paying a claimed fee into the fee wallet
+    init_fees(&mut env, mint, dest).unwrap();
+    // A fee paid in USDC into the fee wallet
     let source = env.token_account_of(&mint, &fee_wallet(), usdc(300.0));
     let v = env.vault_state();
     let mark = env.dist_state().cash_mark;
@@ -93,19 +106,19 @@ fn usdc_launch_fees_enter_the_vault_as_capital() {
     env.assert_invariant();
     env.next_epoch();
     env.distribute().unwrap();
-    assert_eq!(env.dist_state().buckets(), 0, "LaunchLab fees stay in the vault and are not distributed");
+    assert_eq!(env.dist_state().buckets(), 0, "token fees stay in the vault and are not distributed");
     expect_err(sweep(&mut env, source, mint, None), "NothingToWithdraw");
 }
 
 #[test]
-fn non_usdc_launch_fees_go_only_to_the_swap_wallet() {
+fn non_usdc_token_fees_go_only_to_the_swap_wallet() {
     let mut env = Env::new();
     env.seed(usdc(25_000.0));
-    // A test mint in place of the SOL quote
+    // A test mint in place of a fee token that is not USDC
     let quote = env.create_mint();
     let swap_owner = Pubkey::new_unique();
     let swap = env.token_account_of(&quote, &swap_owner, 0);
-    init_launch(&mut env, DEVNET_LAUNCHPAD, quote, swap).unwrap();
+    init_fees(&mut env, quote, swap).unwrap();
     let source = env.token_account_of(&quote, &fee_wallet(), 5_000_000);
     let cash = env.vault_state().cash;
 
@@ -155,7 +168,7 @@ fn token_2022_fees_go_only_to_the_swap_wallet() {
     // A fee paid in a Token-2022 token into the fee wallet's token account
     let quote = token_2022_mint(&mut env);
     let swap = token_2022_account(&mut env, &quote, &Pubkey::new_unique(), 0);
-    init_launch(&mut env, DEVNET_LAUNCHPAD, quote, swap).unwrap();
+    init_fees(&mut env, quote, swap).unwrap();
     let source = token_2022_account(&mut env, &quote, &fee_wallet(), 5_000_000);
     let cash = env.vault_state().cash;
     let token_2022 = anchor_spl::token_2022::ID;
@@ -175,19 +188,19 @@ fn token_2022_fees_go_only_to_the_swap_wallet() {
 }
 
 #[test]
-fn only_admin_configures_the_platform() {
+fn only_the_admin_changes_the_fee_config() {
     let mut env = Env::new();
     let (mint, dest) = (env.mint, env.buyback_tokens);
-    init_launch(&mut env, DEVNET_LAUNCHPAD, mint, dest).unwrap();
+    init_fees(&mut env, mint, dest).unwrap();
     let attacker = env.caller();
     let theirs = env.token_account(&attacker.pubkey(), 0);
     let ix = Instruction::new_with_bytes(
         bust::id(),
-        &bust::instruction::UpdateLaunchConfig { platform_config: Pubkey::new_unique() }.data(),
-        bust::accounts::UpdateLaunchConfig {
+        &bust::instruction::UpdateTokenFeeConfig {}.data(),
+        bust::accounts::UpdateTokenFeeConfig {
             admin: attacker.pubkey(),
             config: config(),
-            launch_config: launch_config(),
+            token_fee_config: token_fee_config(),
             quote_mint: mint,
             swap_destination: theirs,
         }
@@ -197,21 +210,21 @@ fn only_admin_configures_the_platform() {
 }
 
 #[test]
-fn admin_can_move_the_platform_to_another_quote_token() {
+fn the_admin_can_move_fees_to_another_token() {
     let mut env = Env::new();
     let (mint, dest) = (env.mint, env.buyback_tokens);
-    init_launch(&mut env, DEVNET_LAUNCHPAD, mint, dest).unwrap();
+    init_fees(&mut env, mint, dest).unwrap();
     let quote = token_2022_mint(&mut env);
     let swap = token_2022_account(&mut env, &quote, &Pubkey::new_unique(), 0);
     let admin = env.admin.insecure_clone();
     let update = |quote_mint: Pubkey, swap_destination: Pubkey| {
         Instruction::new_with_bytes(
             bust::id(),
-            &bust::instruction::UpdateLaunchConfig { platform_config: Pubkey::new_unique() }.data(),
-            bust::accounts::UpdateLaunchConfig {
+            &bust::instruction::UpdateTokenFeeConfig {}.data(),
+            bust::accounts::UpdateTokenFeeConfig {
                 admin: admin.pubkey(),
                 config: config(),
-                launch_config: launch_config(),
+                token_fee_config: token_fee_config(),
                 quote_mint,
                 swap_destination,
             }
@@ -221,7 +234,7 @@ fn admin_can_move_the_platform_to_another_quote_token() {
     // The swap account must hold the new quote token
     expect_err(env.send(&[update(quote, dest)], &[&admin]), "ConstraintTokenMint");
     env.send(&[update(quote, swap)], &[&admin]).unwrap();
-    let c: bust::LaunchConfig = env.account(&launch_config());
+    let c: bust::TokenFeeConfig = env.account(&token_fee_config());
     assert_eq!((c.quote_mint, c.swap_destination), (quote, swap));
 
     // Fees in the new token now leave the fee wallet; the old token no longer matches the config

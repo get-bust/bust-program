@@ -80,7 +80,7 @@ vault was larger. This is the price of I2.
 | D2 | Nothing is distributed until the queue is empty and past the high-water mark | `distribute_waits_for_empty_queue`, `high_water_mark_blocks_profit_until_recovered` |
 | D3 | Profit that open positions are sitting on is not distributed | `profit_open_positions_are_up_is_not_distributed` |
 | D3a | The caller of `distribute` cannot give a price older than the newest the market has seen | `a_distribution_cannot_reach_back_for_a_price_that_hides_open_profit` |
-| D4 | Capital put in is never distributed as profit | `distribute_splits_fees_and_profit`, `usdc_launch_fees_enter_the_vault_as_capital` |
+| D4 | Capital put in is never distributed as profit | `distribute_splits_fees_and_profit`, `usdc_token_fees_enter_the_vault_as_capital` |
 | D5 | Buckets pay only registered wallets, and the staker bucket never leaves through `withdraw_bucket` | `buckets_go_only_to_registered_wallets` |
 | D6 | Stake tokens back every stake, and the staker bucket covers every reward earned | Walk |
 | D7 | xBUST never loses backing: a convert or a funding cannot lower the $BUST behind each xBUST | Walk, `early_converter_cannot_take_unclaimed_xbust_backing` |
@@ -101,7 +101,7 @@ vault was larger. This is the price of I2.
 | A4 | Only the admin configures, and params stay within validated bounds | `only_admin_updates_config`, `config_rejects_invalid_params` |
 | A5 | Rent goes back only to whoever paid it | `rent_goes_back_only_to_whoever_paid_it` |
 | A6 | Nothing initialises twice | `nothing_initialises_twice`, `initialize_runs_once` |
-| A7 | LaunchLab accepts only the two Raydium program ids | `launch_config_only_accepts_raydium_launchlab` |
+| A7 | A fee leaves the fee wallet only for the vault or the registered swap account, with the token program that owns it | `usdc_token_fees_enter_the_vault_as_capital`, `non_usdc_token_fees_go_only_to_the_swap_wallet`, `token_2022_fees_go_only_to_the_swap_wallet` |
 | A8 | Pause locks no funds: close, liquidate and withdraw work while paused | `pause_locks_no_funds`, `pause_stops_new_positions_only` |
 
 ## What is not covered

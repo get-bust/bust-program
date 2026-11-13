@@ -46,11 +46,11 @@ Found by the internal reviews and the random walk.
 |---|---|---|---|
 | 2026-10-30 | Critical | Unclaimed xBUST was left out of the xBUST rate, so early converters could drain backing that belonged to others | Fixed: `early_converter_cannot_take_unclaimed_xbust_backing` |
 | 2026-10-30 | High | `withdraw_fees` let the admin take fees around the distribution | Removed |
-| 2026-10-30 | High | The fee wallet PDA could have signed for an arbitrary program | Prevented: `launch_config_only_accepts_raydium_launchlab` |
+| 2026-10-30 | High | The fee wallet PDA could have signed for an arbitrary program | Removed: the call it signed is gone, and the fee wallet now signs token transfers only |
 | 2026-10-30 | Medium | A public `fund_epoch` could lock an epoch's pool with one unit of $BUST | Prevented: `only_buyback_authority_funds_and_claims_go_to_the_loser` |
-| 2026-10-30 | Medium | Capital put in could have counted as profit | Prevented: `usdc_launch_fees_enter_the_vault_as_capital` |
+| 2026-10-30 | Medium | Capital put in could have counted as profit | Prevented: `usdc_token_fees_enter_the_vault_as_capital` |
 | 2026-10-30 | Medium | New xBUST was opened at 1:1 instead of the current rate | Fixed |
-| 2026-10-30 | Low | The same account could be passed twice as writable in `sweep_launch_fees` | Fixed |
+| 2026-10-30 | Low | The same account could be passed twice as writable in `sweep_token_fees` | Fixed |
 | 2026-11-07 | Medium | The caller of `distribute` could pick the message within the 5 s age limit that showed the least open profit, so profit that traders were sitting on could be distributed | Fixed: `a_distribution_cannot_reach_back_for_a_price_that_hides_open_profit` |
 | 2026-11-07 | High | An open order refused by a cap kept a valid fill price, so its owner could free the cap once the price had moved and fill at the old price. Found by the random walk | Fixed: `a_cap_is_never_a_way_to_hold_an_old_fill_price` |
 

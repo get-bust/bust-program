@@ -140,7 +140,7 @@ pub struct XbustLocked {
 }
 
 #[event]
-pub struct LaunchFeesSwept {
+pub struct TokenFeesSwept {
     pub amount: u64,
     /// true: the USDC entered the vault; false: it went to the swap wallet (to be swapped to USDC and seeded)
     pub to_vault: bool,
