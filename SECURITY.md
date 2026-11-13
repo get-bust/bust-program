@@ -33,6 +33,10 @@ or the buyback wallet to act against users. Those are trust assumptions, describ
   price published by Pyth would be used.
 - **Keepers are needed for liveness, not for safety.** Anyone can fill, cancel and liquidate, but if nobody does,
   orders wait and bust positions stay open while the vault carries the loss.
+- **A day without any keeper gives traders a choice.** An order expires a day after its fill time and then only
+  cancels. If no keeper fills anything for that whole day, a trader who can fetch fill messages could fill the
+  orders that went their way and let the rest expire. The expiry is a day long so that this needs every keeper to
+  be gone for a day, by which time unliquidated positions are the larger problem.
 - **A distribution's price is only as fresh as the market's clock.** The caller of `distribute` cannot go below the
   newest publish time the market has seen, but can choose among messages newer than that. Keepers observe every
   second, so that leaves about a second of choice, and the open profit held back can differ by that second's move.

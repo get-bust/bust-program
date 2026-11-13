@@ -978,6 +978,15 @@ impl Env {
 
     /// Cancels with the price account as the proof that the order's fill message cannot fill it
     pub fn cancel(&mut self, order: &Pubkey) -> Result<(), String> {
+        self.cancel_with(order, true)
+    }
+
+    /// Cancels without handing in a price: only an expired order, or a close order whose position is gone, goes through
+    pub fn cancel_without_price(&mut self, order: &Pubkey) -> Result<(), String> {
+        self.cancel_with(order, false)
+    }
+
+    fn cancel_with(&mut self, order: &Pubkey, price: bool) -> Result<(), String> {
         let o: bust::OrderRequest = self.account(order);
         let caller = self.keeper.insecure_clone();
         let ix = Instruction::new_with_bytes(
@@ -991,7 +1000,7 @@ impl Env {
                 order: *order,
                 market: o.market,
                 vault: vault(),
-                price_update: self.price,
+                price_update: price.then_some(self.price),
                 position: o.position,
             }
             .to_account_metas(None),

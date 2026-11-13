@@ -214,7 +214,7 @@ fn an_order_fills_once_and_a_filled_order_cannot_be_cancelled() {
             order,
             vault: vault(),
             market: env.market,
-            price_update: env.price,
+            price_update: Some(env.price),
             position: Pubkey::default(),
         }
         .to_account_metas(None),

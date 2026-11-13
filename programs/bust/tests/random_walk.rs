@@ -232,7 +232,13 @@ impl Walk {
             let wait = o.fill_at - self.env.now;
             self.env.set_time(self.env.now + wait);
         }
-        // A keeper can always fetch an order's fill message from Hermes, however late; now and then Pyth was down
+        // An order the walk left waiting for more than a day (epochs pass in between) can no longer fill. It must
+        // cancel with no price, or it would be stuck
+        if self.env.now > o.fill_at + bust::ORDER_EXPIRY_SEC {
+            self.env.cancel_without_price(&order).unwrap();
+            return true;
+        }
+        // Until then a keeper can fetch an order's fill message from Hermes, however late; now and then Pyth was down
         // at T and the message came too late to fill at
         let gap = if self.rng.pick(8) == 0 { Params::DEFAULT.max_fill_gap_sec + 1 } else { 0 };
         let (account, latest) = (self.env.price, self.env.last_price);

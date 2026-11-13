@@ -148,6 +148,11 @@ fn fill_time(now: i64, market: &Market, params: &Params) -> i64 {
     now.max(market.last_publish_time) + params.fill_delay_sec
 }
 
+/// Past its expiry an order can no longer fill, and can be cancelled without a price
+fn expired(order: &OrderRequest, now: i64) -> bool {
+    now > order.fill_at.saturating_add(ORDER_EXPIRY_SEC)
+}
+
 fn order_space() -> usize {
     8 + OrderRequest::INIT_SPACE
 }
@@ -313,6 +318,7 @@ pub fn handle_execute_open(ctx: Context<ExecuteOpen>) -> Result<()> {
     let params = &config.params;
     let order = &ctx.accounts.order;
     require!(!config.paused, PerpError::Paused);
+    require!(!expired(order, Clock::get()?.unix_timestamp), PerpError::OrderExpired);
 
     let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, params, FILL_PRICE_ANY_AGE)?;
     check_fill_price(&read, order.fill_at, Some(order.leverage), params)?;
@@ -604,6 +610,7 @@ pub struct ExecuteClose<'info> {
 
 pub fn handle_execute_close(ctx: Context<ExecuteClose>) -> Result<()> {
     let params = ctx.accounts.config.params;
+    require!(!expired(&ctx.accounts.order, Clock::get()?.unix_timestamp), PerpError::OrderExpired);
     let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
     check_fill_price(&read, ctx.accounts.order.fill_at, None, &params)?;
     observe(&mut ctx.accounts.market, read.publish_time);
@@ -663,8 +670,9 @@ pub struct CancelOrder<'info> {
     pub market: Account<'info, Market>,
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
-    /// The order's fill message, as proof that it cannot fill the order
-    pub price_update: Account<'info, PriceUpdateV2>,
+    /// The order's fill message, as proof that it cannot fill the order. Not needed for an expired order, or for a
+    /// close order whose position is gone
+    pub price_update: Option<Account<'info, PriceUpdateV2>>,
     /// CHECK: The position a close order would close, only to see whether it still exists, or whatever order.position
     /// holds for an open order (the default key). A close order whose position is already gone has nothing to fill
     #[account(address = order.position)]
@@ -672,9 +680,10 @@ pub struct CancelOrder<'info> {
 }
 
 /// Cancels an order that cannot fill: its fill message came more than max_fill_gap_sec after the fill time (a Pyth
-/// outage) or its confidence is too wide; or a close order whose position no longer exists. Every other order can only
-/// be filled, so cancelling is never a way out of a fill price the user does not like. An open order's margin and its
-/// room under the caps come back.
+/// outage) or its confidence is too wide; or a close order whose position no longer exists; or an order that nobody
+/// filled within ORDER_EXPIRY_SEC, which can no longer fill at all. Every other order can only be filled, so
+/// cancelling is never a way out of a fill price the user does not like. An open order's margin and its room under the
+/// caps come back.
 pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
     let params = ctx.accounts.config.params;
     let order = &ctx.accounts.order;
@@ -682,9 +691,10 @@ pub fn handle_cancel_order(ctx: Context<CancelOrder>) -> Result<()> {
     // A close order whose position was liquidated, or closed by another order, since it was requested has nothing
     // to fill; any other order needs its fill message to show that it cannot fill
     let gone = !is_open && ctx.accounts.position.data_is_empty();
-    if !gone {
+    if !gone && !expired(order, Clock::get()?.unix_timestamp) {
         let open_leverage = is_open.then_some(order.leverage);
-        let read = read_unchecked_conf(&ctx.accounts.price_update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
+        let update = ctx.accounts.price_update.as_ref().ok_or(PerpError::OrderFillable)?;
+        let read = read_unchecked_conf(update, &ctx.accounts.market.feed_id, &params, FILL_PRICE_ANY_AGE)?;
         require_fill_message(&read, order.fill_at)?;
         require!(!fillable(&read, order.fill_at, open_leverage, &params), PerpError::OrderFillable);
     }

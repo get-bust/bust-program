@@ -49,6 +49,12 @@ pub const MAX_TOKEN_FEE_OPS_BPS: u16 = 2_000;
 #[constant]
 pub const DEPOSIT_SEED: &[u8] = b"deposit";
 
+/// How long after its fill time an order can still be filled. Past that it can only be cancelled, with no price: an
+/// order whose fill message can no longer be fetched would otherwise hold its margin, and its room under the caps,
+/// for ever. It is long on purpose. Until it runs out an order can only fill, and after it only cancel, so there is
+/// never a moment when both are possible; and nobody can count on every keeper staying away for a day
+pub const ORDER_EXPIRY_SEC: i64 = 24 * 60 * 60;
+
 /// An epoch can be funded for this many epochs after it closes. After that its loss records can be closed and their
 /// rent returned, and it can no longer be funded (its losers' shares would have nobody left to claim them)
 pub const FUNDING_WINDOW_EPOCHS: u64 = 30;

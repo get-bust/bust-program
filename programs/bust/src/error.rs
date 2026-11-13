@@ -66,4 +66,6 @@ pub enum PerpError {
     PythOutage,
     #[msg("Deposit is below the minimum sweep")]
     DepositTooSmall,
+    #[msg("The order was not filled in time: it can only be cancelled")]
+    OrderExpired,
 }

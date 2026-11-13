@@ -30,13 +30,14 @@ which shows the rule held in the cases that ran, not in all cases. See [What is 
 | # | Rule | Checked by |
 |---|---|---|
 | O1 | An order fills at exactly one Pyth message: `publish_time ≥ T` and `prev_publish_time < T` | `an_order_fills_at_exactly_one_price` |
-| O2 | Waiting does not change the fill price; that message stays valid however late it is used | `a_fill_price_can_be_used_long_after_it_was_published` |
+| O2 | Waiting does not change the fill price; that message stays valid until the order expires, a day after its fill time | `a_fill_price_can_be_used_long_after_it_was_published` |
 | O3 | An order cancels only with proof that it cannot fill, so cancelling is no way out of a bad price | `only_a_pyth_outage_lets_an_order_be_cancelled`, `a_fill_message_too_uncertain_to_fill_cancels_the_order`, `an_order_within_the_caps_still_cannot_be_cancelled` |
 | O4 | A close order whose position is gone can be cancelled | `a_close_order_whose_position_is_gone_can_be_cancelled` |
 | O5 | A price must be of the market's feed, owned by Pyth, and verified by enough signatures | `a_fill_cannot_use_another_feeds_price`, `a_fill_cannot_use_a_price_account_pyth_does_not_own`, `partial_verification_needs_enough_signatures` |
 | O6 | The market's publish time only moves forward, so a lagging clock gives away no fill price | `fills_and_liquidations_move_the_market_clock_forward_only`, `a_lagging_chain_clock_does_not_give_away_the_fill_price` |
 | O7 | An order fills once | `an_order_fills_once_and_a_filled_order_cannot_be_cancelled` |
 | O8 | An open fills only if confidence / price × leverage ≤ 25% of the margin | `high_leverage_needs_a_tight_confidence_interval` |
+| O9 | An order nobody filled within a day can no longer fill, and cancels with no price; a close order that expires leaves its position open | `an_order_nobody_filled_in_a_day_can_only_be_cancelled`, `an_expired_close_order_leaves_the_position_open`, Walk |
 
 ## Open interest
 

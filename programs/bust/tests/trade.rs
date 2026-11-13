@@ -167,6 +167,58 @@ fn a_fill_price_can_be_used_long_after_it_was_published() {
 }
 
 #[test]
+fn an_order_nobody_filled_in_a_day_can_only_be_cancelled() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    let pyth = pyth_solana_receiver_sdk::ID;
+    let order = env.request_open(&owner, &t.kp, Side::Long, usdc(100.0), 10).unwrap();
+    let fill_at = env.now + FILL_DELAY;
+    let price = env.price;
+
+    // Up to the last second of the day it can only fill: without its fill message it cannot be cancelled, and with a
+    // message that fills it neither
+    env.set_time(fill_at + bust::ORDER_EXPIRY_SEC);
+    expect_err(env.cancel_without_price(&order), "OrderFillable");
+    env.write_price_after(price, 100_0000_0000, fill_at, fill_at - 1, pyth);
+    expect_err(env.cancel(&order), "OrderFillable");
+
+    // A second later it can no longer fill, even with its own message, and cancels with no price at all
+    env.set_time(fill_at + bust::ORDER_EXPIRY_SEC + 1);
+    env.write_price_after(price, 100_0000_0000, fill_at, fill_at - 1, pyth);
+    expect_err(env.execute_open(&order).map(|_| ()), "OrderExpired");
+    env.cancel_without_price(&order).unwrap();
+    let u = env.user_state(&owner);
+    assert_eq!((u.balance, u.reserved), (usdc(1_000.0), 0), "the margin is back");
+    assert_eq!((env.market_state().pending_long, env.vault_state().pending_long_total), (0, 0), "and its room under the caps");
+    env.assert_invariant();
+}
+
+#[test]
+fn an_expired_close_order_leaves_the_position_open() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    let t = env.trader(usdc(1_000.0));
+    let owner = t.kp.pubkey();
+    let pos = env.open(&owner, &t.kp, Side::Long, usdc(100.0), 10).unwrap();
+    let close = env.request_close(&pos, &t.kp).unwrap();
+    let fill_at = env.account::<bust::OrderRequest>(&close).fill_at;
+
+    env.set_time(fill_at + bust::ORDER_EXPIRY_SEC + 1);
+    let price = env.price;
+    env.write_price_after(price, 100_0000_0000, fill_at, fill_at - 1, pyth_solana_receiver_sdk::ID);
+    expect_err(env.execute_close(&close), "OrderExpired");
+    env.cancel_without_price(&close).unwrap();
+    // The position is untouched and can be closed with a new order
+    let p: bust::Position = env.account(&pos);
+    assert_eq!(p.margin, usdc(100.0));
+    assert_eq!(env.user_state(&owner).reserved, 0);
+    env.close_at(&pos, &t.kp, 100.0).unwrap();
+    env.assert_invariant();
+}
+
+#[test]
 fn only_a_pyth_outage_lets_an_order_be_cancelled() {
     let mut env = Env::new();
     env.seed(usdc(25_000.0));

@@ -165,6 +165,10 @@ sequenceDiagram
   down, or its confidence is too wide (below). Otherwise the order can only be filled. Whether an order fills or
   cancels is never a choice, so waiting for nobody to fill and cancelling is not a way out of a bad price. A
   close order whose position was liquidated in the meantime cancels without a price.
+- **An order nobody filled within a day expires.** From then on it cannot fill, even with its own message, and
+  anyone can cancel it without a price (`ORDER_EXPIRY_SEC`). Without this, an order whose fill message could no
+  longer be fetched would hold its margin and its room under the caps for ever. Up to the last second it can only
+  fill and after it only cancel, so the two are never possible at once.
 - Fill prices need at least 3 verified Wormhole signatures under partial verification and a confidence interval
   within 0.2% of the price. **An open** must also be within a quarter of what its margin covers:
   `conf / price × leverage ≤ 25%`, so at 1000×, where the margin covers a 10 bps move, at most 2.5 bps of
