@@ -7,7 +7,8 @@ use anchor_lang::{
 };
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked},
+    token::{Mint, Token, TokenAccount},
+    token_interface::{self, TokenInterface, TransferChecked},
 };
 
 use crate::{constants::*, error::PerpError, events::LaunchFeesSwept, state::*};
@@ -22,9 +23,10 @@ pub struct InitLaunchConfig<'info> {
     pub config: Account<'info, Config>,
     #[account(init, payer = admin, space = 8 + LaunchConfig::INIT_SPACE, seeds = [LAUNCH_CONFIG_SEED], bump)]
     pub launch_config: Account<'info, LaunchConfig>,
-    pub quote_mint: Account<'info, Mint>,
+    /// SPL Token or Token-2022: a fee can arrive in a token of either program
+    pub quote_mint: InterfaceAccount<'info, token_interface::Mint>,
     #[account(token::mint = quote_mint)]
-    pub swap_destination: Account<'info, TokenAccount>,
+    pub swap_destination: InterfaceAccount<'info, token_interface::TokenAccount>,
     pub system_program: Program<'info, System>,
 }
 
@@ -54,7 +56,7 @@ pub struct UpdateLaunchConfig<'info> {
     #[account(mut, seeds = [LAUNCH_CONFIG_SEED], bump = launch_config.bump)]
     pub launch_config: Account<'info, LaunchConfig>,
     #[account(token::mint = launch_config.quote_mint)]
-    pub swap_destination: Account<'info, TokenAccount>,
+    pub swap_destination: InterfaceAccount<'info, token_interface::TokenAccount>,
 }
 
 pub fn handle_update_launch_config(ctx: Context<UpdateLaunchConfig>, platform_config: Pubkey) -> Result<()> {
@@ -171,15 +173,16 @@ pub struct SweepLaunchFees<'info> {
     /// CHECK: The fee wallet PDA (signs only)
     #[account(seeds = [FEE_WALLET_SEED], bump = launch_config.fee_wallet_bump)]
     pub fee_wallet: UncheckedAccount<'info>,
-    #[account(mut, token::mint = quote_mint, token::authority = fee_wallet)]
-    pub source: Box<Account<'info, TokenAccount>>,
+    #[account(mut, token::mint = quote_mint, token::authority = fee_wallet, token::token_program = token_program)]
+    pub source: Box<InterfaceAccount<'info, token_interface::TokenAccount>>,
     #[account(address = launch_config.quote_mint)]
-    pub quote_mint: Box<Account<'info, Mint>>,
+    pub quote_mint: Box<InterfaceAccount<'info, token_interface::Mint>>,
     /// The registered swap account when the quote is not USDC; omitted for USDC (the money goes to the vault token account)
     #[account(mut)]
-    pub destination: Option<Box<Account<'info, TokenAccount>>>,
+    pub destination: Option<Box<InterfaceAccount<'info, token_interface::TokenAccount>>>,
     pub usdc_mint: Box<Account<'info, Mint>>,
-    pub token_program: Program<'info, Token>,
+    /// The quote mint's own token program: SPL Token or Token-2022
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 /// A claimed fee either enters the vault (USDC; counted as capital, not profit) or goes to the registered swap account.
@@ -196,7 +199,7 @@ pub fn handle_sweep_launch_fees(ctx: Context<SweepLaunchFees>) -> Result<()> {
 
     let bump = [ctx.accounts.launch_config.fee_wallet_bump];
     let seeds: &[&[&[u8]]] = &[&[FEE_WALLET_SEED, &bump]];
-    transfer_checked(
+    token_interface::transfer_checked(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.key(),
             TransferChecked {

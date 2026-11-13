@@ -30,6 +30,16 @@ fn init_launch(env: &mut Env, program: Pubkey, quote: Pubkey, swap_destination: 
 }
 
 fn sweep(env: &mut Env, source: Pubkey, quote: Pubkey, destination: Option<Pubkey>) -> Result<(), String> {
+    sweep_with(env, source, quote, destination, spl_token::ID)
+}
+
+fn sweep_with(
+    env: &mut Env,
+    source: Pubkey,
+    quote: Pubkey,
+    destination: Option<Pubkey>,
+    token_program: Pubkey,
+) -> Result<(), String> {
     let c = env.caller();
     let ix = Instruction::new_with_bytes(
         bust::id(),
@@ -45,7 +55,7 @@ fn sweep(env: &mut Env, source: Pubkey, quote: Pubkey, destination: Option<Pubke
             quote_mint: quote,
             destination,
             usdc_mint: env.mint,
-            token_program: spl_token::ID,
+            token_program,
         }
         .to_account_metas(None),
     );
@@ -105,6 +115,61 @@ fn non_usdc_launch_fees_go_only_to_the_swap_wallet() {
     expect_err(sweep(&mut env, source, quote, Some(theirs)), "InvalidDestination");
     sweep(&mut env, source, quote, Some(swap)).unwrap();
     assert_eq!(env.token_balance(&swap), 5_000_000);
+    assert_eq!(env.vault_state().cash, cash, "the vault ledger does not move");
+    env.assert_invariant();
+}
+
+/// A Token-2022 mint without extensions has the SPL Token layout; only the owning program differs
+fn token_2022_mint(env: &mut Env) -> Pubkey {
+    let key = Pubkey::new_unique();
+    let mut data = vec![0u8; spl_token::state::Mint::LEN];
+    spl_token::state::Mint { decimals: 6, is_initialized: true, supply: 1_000_000_000_000, ..Default::default() }
+        .pack_into_slice(&mut data);
+    let lamports = env.svm.minimum_balance_for_rent_exemption(data.len());
+    let account = Account { lamports, data, owner: anchor_spl::token_2022::ID, executable: false, rent_epoch: 0 };
+    env.svm.set_account(key, account).unwrap();
+    key
+}
+
+fn token_2022_account(env: &mut Env, mint: &Pubkey, owner: &Pubkey, amount: u64) -> Pubkey {
+    let key = Pubkey::new_unique();
+    let mut data = vec![0u8; spl_token::state::Account::LEN];
+    spl_token::state::Account {
+        mint: *mint,
+        owner: *owner,
+        amount,
+        state: spl_token::state::AccountState::Initialized,
+        ..Default::default()
+    }
+    .pack_into_slice(&mut data);
+    let lamports = env.svm.minimum_balance_for_rent_exemption(data.len());
+    let account = Account { lamports, data, owner: anchor_spl::token_2022::ID, executable: false, rent_epoch: 0 };
+    env.svm.set_account(key, account).unwrap();
+    key
+}
+
+#[test]
+fn token_2022_fees_go_only_to_the_swap_wallet() {
+    let mut env = Env::new();
+    env.seed(usdc(25_000.0));
+    // A fee paid in a Token-2022 token into the fee wallet's token account
+    let quote = token_2022_mint(&mut env);
+    let swap = token_2022_account(&mut env, &quote, &Pubkey::new_unique(), 0);
+    init_launch(&mut env, DEVNET_LAUNCHPAD, quote, swap).unwrap();
+    let source = token_2022_account(&mut env, &quote, &fee_wallet(), 5_000_000);
+    let cash = env.vault_state().cash;
+    let token_2022 = anchor_spl::token_2022::ID;
+
+    // The wrong token program, no destination, and somebody else's account are all refused
+    assert!(sweep_with(&mut env, source, quote, Some(swap), spl_token::ID).is_err());
+    expect_err(sweep_with(&mut env, source, quote, None, token_2022), "InvalidDestination");
+    let attacker = env.caller();
+    let theirs = token_2022_account(&mut env, &quote, &attacker.pubkey(), 0);
+    expect_err(sweep_with(&mut env, source, quote, Some(theirs), token_2022), "InvalidDestination");
+
+    sweep_with(&mut env, source, quote, Some(swap), token_2022).unwrap();
+    assert_eq!(env.token_balance(&swap), 5_000_000);
+    assert_eq!(env.token_balance(&source), 0);
     assert_eq!(env.vault_state().cash, cash, "the vault ledger does not move");
     env.assert_invariant();
 }
