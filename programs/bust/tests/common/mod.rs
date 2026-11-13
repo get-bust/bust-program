@@ -130,6 +130,8 @@ pub struct Env {
     pub buyback_tokens: Pubkey,
     pub dev_tokens: Pubkey,
     pub bust_mint: Pubkey,
+    /// The token program $BUST was minted with: SPL Token or Token-2022
+    pub bust_token_program: Pubkey,
     /// Funds the treasury as the buyback authority
     pub buyback: Keypair,
 }
@@ -140,6 +142,22 @@ impl Env {
     }
 
     pub fn with_params(params: Params) -> Self {
+        Self::with_setup(params, spl_token::ID, None)
+    }
+
+    /// The same platform with $BUST as a Token-2022 mint
+    pub fn with_token_2022_bust() -> Self {
+        Self::with_setup(TEST_PARAMS, anchor_spl::token_2022::ID, None)
+    }
+
+    /// The same platform with $BUST as a Token-2022 mint that carries extensions: a mint account taken from devnet,
+    /// byte for byte (the metadata pointer and token metadata extensions, no mint authority)
+    pub fn with_extended_mint_as_bust() -> Self {
+        let data = include_bytes!("../fixtures/token_2022_metadata_mint.bin").to_vec();
+        Self::with_setup(TEST_PARAMS, anchor_spl::token_2022::ID, Some(data))
+    }
+
+    fn with_setup(params: Params, bust_token_program: Pubkey, bust_mint_data: Option<Vec<u8>>) -> Self {
         let mut svm = LiteSVM::new();
         let bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/deploy/bust.so"));
         svm.add_program(bust::id(), bytes).unwrap();
@@ -162,6 +180,7 @@ impl Env {
             buyback_tokens: Pubkey::default(),
             dev_tokens: Pubkey::default(),
             bust_mint: Pubkey::default(),
+            bust_token_program,
             buyback: Keypair::new(),
         };
         let keeper = env.keeper.pubkey();
@@ -190,7 +209,16 @@ impl Env {
         );
         env.send(&[init], &[&admin]).unwrap();
 
-        env.bust_mint = env.create_mint();
+        env.bust_mint = match bust_mint_data {
+            None => env.create_mint_with(&bust_token_program),
+            Some(data) => {
+                let key = Pubkey::new_unique();
+                let lamports = env.svm.minimum_balance_for_rent_exemption(data.len());
+                let account = Account { lamports, data, owner: bust_token_program, executable: false, rent_epoch: 0 };
+                env.svm.set_account(key, account).unwrap();
+                key
+            }
+        };
         let init = Instruction::new_with_bytes(
             bust::id(),
             &bust::instruction::InitStakePool { unstake_sec: UNSTAKE_SEC }.data(),
@@ -200,7 +228,7 @@ impl Env {
                 bust_mint: env.bust_mint,
                 stake_pool: stake_pool(),
                 stake_tokens: stake_tokens(),
-                token_program: spl_token::ID,
+                token_program: bust_token_program,
                 system_program: system_program::ID,
             }
             .to_account_metas(None),
@@ -220,7 +248,7 @@ impl Env {
                 treasury_tokens: treasury_tokens(),
                 xbust_mint: xbust_mint(),
                 token_program: spl_token::ID,
-                bust_token_program: spl_token::ID,
+                bust_token_program,
                 system_program: system_program::ID,
             }
             .to_account_metas(None),
@@ -259,17 +287,26 @@ impl Env {
     }
 
     pub fn create_mint(&mut self) -> Pubkey {
+        self.create_mint_with(&spl_token::ID)
+    }
+
+    /// A mint under `token_program`. Without extensions a Token-2022 mint and its accounts have the SPL Token layout
+    /// and take the same instructions, so they are built for SPL Token and sent to the other program
+    pub fn create_mint_with(&mut self, token_program: &Pubkey) -> Pubkey {
         let mint = Keypair::new();
         let rent = self.svm.minimum_balance_for_rent_exemption(spl_token::state::Mint::LEN);
+        let mut init =
+            spl_token::instruction::initialize_mint2(&spl_token::ID, &mint.pubkey(), &self.admin.pubkey(), None, 6).unwrap();
+        init.program_id = *token_program;
         let ixs = [
             system_instruction::create_account(
                 &self.admin.pubkey(),
                 &mint.pubkey(),
                 rent,
                 spl_token::state::Mint::LEN as u64,
-                &spl_token::ID,
+                token_program,
             ),
-            spl_token::instruction::initialize_mint2(&spl_token::ID, &mint.pubkey(), &self.admin.pubkey(), None, 6).unwrap(),
+            init,
         ];
         let admin = self.admin.insecure_clone();
         self.send(&ixs, &[&admin, &mint]).unwrap();
@@ -284,29 +321,47 @@ impl Env {
     pub fn token_account_of(&mut self, mint: &Pubkey, owner: &Pubkey, amount: u64) -> Pubkey {
         let acc = Keypair::new();
         let rent = self.svm.minimum_balance_for_rent_exemption(spl_token::state::Account::LEN);
+        // The account lives under the program that owns its mint
+        let token_program = self.svm.get_account(mint).unwrap().owner;
+        let mut init = spl_token::instruction::initialize_account3(&spl_token::ID, &acc.pubkey(), mint, owner).unwrap();
+        init.program_id = token_program;
         let mut ixs = vec![
             system_instruction::create_account(
                 &self.admin.pubkey(),
                 &acc.pubkey(),
                 rent,
                 spl_token::state::Account::LEN as u64,
-                &spl_token::ID,
+                &token_program,
             ),
-            spl_token::instruction::initialize_account3(&spl_token::ID, &acc.pubkey(), mint, owner).unwrap(),
+            init,
         ];
         // The xBUST mint authority is the treasury: open empty accounts without minting
-        if amount > 0 {
-            ixs.push(
-                spl_token::instruction::mint_to(&spl_token::ID, mint, &acc.pubkey(), &self.admin.pubkey(), &[], amount).unwrap(),
-            );
+        let mint_data = self.svm.get_account(mint).unwrap().data;
+        let authority =
+            spl_token::state::Mint::unpack_from_slice(&mint_data[..spl_token::state::Mint::LEN]).unwrap().mint_authority;
+        let mintable = authority == Some(self.admin.pubkey()).into();
+        if amount > 0 && mintable {
+            let mut mint_to =
+                spl_token::instruction::mint_to(&spl_token::ID, mint, &acc.pubkey(), &self.admin.pubkey(), &[], amount).unwrap();
+            mint_to.program_id = token_program;
+            ixs.push(mint_to);
         }
         let admin = self.admin.insecure_clone();
         self.send(&ixs, &[&admin, &acc]).unwrap();
+        // A coin whose mint authority is gone cannot be minted: the balance is written into the
+        // account the token program just initialized, as if it had been bought
+        if amount > 0 && !mintable {
+            let mut account = self.svm.get_account(&acc.pubkey()).unwrap();
+            account.data[64..72].copy_from_slice(&amount.to_le_bytes());
+            self.svm.set_account(acc.pubkey(), account).unwrap();
+        }
         acc.pubkey()
     }
 
     pub fn token_balance(&self, account: &Pubkey) -> u64 {
-        spl_token::state::Account::unpack(&self.svm.get_account(account).unwrap().data).unwrap().amount
+        // The first 165 bytes are the same under both token programs; a Token-2022 account may carry extensions after them
+        let data = self.svm.get_account(account).unwrap().data;
+        spl_token::state::Account::unpack_from_slice(&data[..spl_token::state::Account::LEN]).unwrap().amount
     }
 
     pub fn set_time(&mut self, t: i64) {
@@ -513,7 +568,7 @@ impl Env {
                 stake_account: stake_pda(&st.kp.pubkey()),
                 owner_tokens: st.tokens,
                 bust_mint: self.bust_mint,
-                token_program: spl_token::ID,
+                token_program: self.bust_token_program,
             }
             .to_account_metas(None),
         )
@@ -577,7 +632,7 @@ impl Env {
                 authority_bust: src,
                 bust_mint: mint,
                 xbust_mint: xbust_mint(),
-                token_program: spl_token::ID,
+                token_program: self.bust_token_program,
             }
             .to_account_metas(None),
         );
@@ -671,7 +726,7 @@ impl Env {
                 xbust_mint: xbust_mint(),
                 bust_mint: self.bust_mint,
                 owner_bust: bust_dest,
-                token_program: spl_token::ID,
+                token_program: self.bust_token_program,
             }
             .to_account_metas(None),
         );

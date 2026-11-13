@@ -356,3 +356,35 @@ fn the_last_epoch_of_the_window_can_still_be_funded() {
     pass_epochs(&mut env, bust::FUNDING_WINDOW_EPOCHS - 1);
     env.fund_epoch(0, bust_units(100)).unwrap();
 }
+
+#[test]
+fn an_xbust_round_takes_a_token_2022_bust() {
+    // $BUST as a Token-2022 mint. xBUST stays a classic SPL mint
+    xbust_round(Env::with_token_2022_bust());
+}
+
+#[test]
+fn an_xbust_round_takes_a_token_2022_bust_with_extensions() {
+    xbust_round(Env::with_extended_mint_as_bust());
+}
+
+fn xbust_round(mut env: Env) {
+    let pool = bust_units(300);
+    let (t, x) = xbust_holder(&mut env, pool);
+    assert_eq!(env.svm.get_account(&treasury_tokens()).unwrap().owner, anchor_spl::token_2022::ID);
+    assert_eq!(env.svm.get_account(&xbust_mint()).unwrap().owner, spl_token::ID);
+    assert_eq!(env.token_balance(&treasury_tokens()), pool, "the epoch's $BUST is in the treasury");
+    assert_eq!(env.token_balance(&x), pool, "and the loser holds its xBUST at rate 1");
+
+    let mint = env.bust_mint;
+    let out = env.token_account_of(&mint, &t.kp.pubkey(), 0);
+    let start = env.now;
+    env.lock_xbust(&t.kp, x, pool).unwrap();
+    env.set_time(start + 10 * 86_400);
+    env.convert(&t.kp, out).unwrap();
+    assert_eq!(env.token_balance(&out), pool / 3);
+    env.set_time(start + 40 * 86_400);
+    env.convert(&t.kp, out).unwrap();
+    assert_eq!(env.token_balance(&out), pool);
+    assert_eq!(env.token_balance(&treasury_tokens()), 0);
+}

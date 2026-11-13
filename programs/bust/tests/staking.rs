@@ -222,3 +222,42 @@ fn staking_around_a_distribution_earns_next_to_nothing() {
     assert!(claimed(&env, &patient) > pot * 99 / 100, "the rest goes to who stayed");
     env.assert_invariant();
 }
+
+#[test]
+fn staking_takes_a_token_2022_bust() {
+    // With $BUST as a Token-2022 mint the pool's token account lives under that program
+    stake_round(Env::with_token_2022_bust());
+}
+
+#[test]
+fn staking_takes_a_token_2022_bust_with_extensions() {
+    stake_round(Env::with_extended_mint_as_bust());
+}
+
+fn stake_round(mut env: Env) {
+    env.seed(usdc(25_000.0));
+    let token_2022 = anchor_spl::token_2022::ID;
+    let a = env.staker(bust_units(100));
+    env.stake(&a, bust_units(100)).unwrap();
+    assert_eq!(env.svm.get_account(&stake_tokens()).unwrap().owner, token_2022);
+    assert_eq!(env.token_balance(&stake_tokens()), bust_units(100));
+
+    // Rewards are USDC and unaffected
+    let pot = fund_stakers(&mut env);
+    env.next_epoch();
+    env.claim(&a).unwrap();
+    assert!(pot - claimed(&env, &a) <= 2);
+
+    // The other token program is refused: it does not own the mint
+    let mut ix = env.move_stake_ix(&a, bust::instruction::RequestUnstake { amount: 1 }.data());
+    ix.accounts.last_mut().unwrap().pubkey = spl_token::ID;
+    let kp = a.kp.insecure_clone();
+    assert!(env.send(&[ix], &[&kp]).is_err());
+
+    env.request_unstake(&a, bust_units(100)).unwrap();
+    env.set_time(env.now + UNSTAKE_SEC);
+    env.withdraw_unstaked(&a).unwrap();
+    assert_eq!(env.token_balance(&a.tokens), bust_units(100));
+    assert_eq!(env.token_balance(&stake_tokens()), 0);
+    env.assert_invariant();
+}
