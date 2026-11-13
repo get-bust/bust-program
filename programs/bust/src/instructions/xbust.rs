@@ -1,5 +1,8 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{burn, mint_to, transfer_checked, Burn, Mint, MintTo, Token, TokenAccount, TransferChecked};
+use anchor_spl::{
+    token::{burn, mint_to, Burn, Mint, MintTo, Token, TokenAccount},
+    token_interface::{self, TokenInterface, TransferChecked},
+};
 
 use crate::{
     constants::*,
@@ -16,7 +19,9 @@ pub struct InitTreasury<'info> {
     pub admin: Signer<'info>,
     #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = admin)]
     pub config: Account<'info, Config>,
-    pub bust_mint: Account<'info, Mint>,
+    /// SPL Token or Token-2022, whichever $BUST was minted with
+    #[account(mint::token_program = bust_token_program)]
+    pub bust_mint: InterfaceAccount<'info, token_interface::Mint>,
     #[account(init, payer = admin, space = 8 + Treasury::INIT_SPACE, seeds = [TREASURY_SEED], bump)]
     pub treasury: Account<'info, Treasury>,
     #[account(
@@ -26,8 +31,9 @@ pub struct InitTreasury<'info> {
         bump,
         token::mint = bust_mint,
         token::authority = treasury,
+        token::token_program = bust_token_program,
     )]
-    pub treasury_tokens: Account<'info, TokenAccount>,
+    pub treasury_tokens: InterfaceAccount<'info, token_interface::TokenAccount>,
     /// Classic SPL; the treasury PDA is the only mint authority, and there is no freeze authority
     #[account(
         init,
@@ -38,7 +44,10 @@ pub struct InitTreasury<'info> {
         mint::authority = treasury,
     )]
     pub xbust_mint: Account<'info, Mint>,
+    /// xBUST's token program (classic SPL)
     pub token_program: Program<'info, Token>,
+    /// $BUST's token program
+    pub bust_token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -115,17 +124,19 @@ pub struct FundEpoch<'info> {
     #[account(mut, seeds = [TREASURY_SEED], bump = treasury.bump, has_one = bust_mint, has_one = xbust_mint)]
     pub treasury: Account<'info, Treasury>,
     #[account(mut, seeds = [TREASURY_TOKENS_SEED], bump = treasury.tokens_bump)]
-    pub treasury_tokens: Account<'info, TokenAccount>,
+    pub treasury_tokens: InterfaceAccount<'info, token_interface::TokenAccount>,
     #[account(mut, seeds = [EPOCH_SEED, &epoch.to_le_bytes()], bump = epoch_record.bump)]
     pub epoch_record: Account<'info, EpochRecord>,
     #[account(seeds = [DISTRIBUTOR_SEED], bump = distributor.bump)]
     pub distributor: Account<'info, Distributor>,
-    #[account(mut, token::mint = bust_mint, token::authority = authority)]
-    pub authority_bust: Account<'info, TokenAccount>,
-    pub bust_mint: Account<'info, Mint>,
+    #[account(mut, token::mint = bust_mint, token::authority = authority, token::token_program = token_program)]
+    pub authority_bust: InterfaceAccount<'info, token_interface::TokenAccount>,
+    #[account(mint::token_program = token_program)]
+    pub bust_mint: InterfaceAccount<'info, token_interface::Mint>,
     /// Its supply, for the current rate
     pub xbust_mint: Account<'info, Mint>,
-    pub token_program: Program<'info, Token>,
+    /// $BUST's token program: SPL Token or Token-2022. Only $BUST moves here
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 /// The $BUST bought with the epoch's xBUST share enters the treasury, and xBUST rights open for that epoch at the current
@@ -153,7 +164,7 @@ pub fn handle_fund_epoch(ctx: Context<FundEpoch>, _epoch: u64, amount: u64) -> R
     };
     require!(xbust > 0, PerpError::ZeroAmount);
 
-    transfer_checked(
+    token_interface::transfer_checked(
         CpiContext::new(
             ctx.accounts.token_program.key(),
             TransferChecked {
@@ -323,14 +334,16 @@ pub struct ConvertVested<'info> {
     #[account(mut, seeds = [TREASURY_SEED], bump = treasury.bump, has_one = xbust_mint, has_one = bust_mint)]
     pub treasury: Account<'info, Treasury>,
     #[account(mut, seeds = [TREASURY_TOKENS_SEED], bump = treasury.tokens_bump)]
-    pub treasury_tokens: Account<'info, TokenAccount>,
+    pub treasury_tokens: InterfaceAccount<'info, token_interface::TokenAccount>,
     #[account(mut, seeds = [VEST_SEED, owner.key().as_ref()], bump = vest.bump, has_one = owner)]
     pub vest: Account<'info, Vest>,
     pub xbust_mint: Account<'info, Mint>,
-    pub bust_mint: Account<'info, Mint>,
-    #[account(mut, token::mint = bust_mint, token::authority = owner)]
-    pub owner_bust: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    #[account(mint::token_program = token_program)]
+    pub bust_mint: InterfaceAccount<'info, token_interface::Mint>,
+    #[account(mut, token::mint = bust_mint, token::authority = owner, token::token_program = token_program)]
+    pub owner_bust: InterfaceAccount<'info, token_interface::TokenAccount>,
+    /// $BUST's token program: SPL Token or Token-2022. Only $BUST moves here
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 /// Unlocked xBUST becomes $BUST at that day's rate: treasury $BUST / (xBUST supply + locked + unclaimed).
@@ -351,7 +364,7 @@ pub fn handle_convert_vested(ctx: Context<ConvertVested>) -> Result<()> {
     if bust > 0 {
         let bump = [treasury.bump];
         let seeds: &[&[&[u8]]] = &[&[TREASURY_SEED, &bump]];
-        transfer_checked(
+        token_interface::transfer_checked(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.key(),
                 TransferChecked {

@@ -220,6 +220,7 @@ impl Env {
                 treasury_tokens: treasury_tokens(),
                 xbust_mint: xbust_mint(),
                 token_program: spl_token::ID,
+                bust_token_program: spl_token::ID,
                 system_program: system_program::ID,
             }
             .to_account_metas(None),
