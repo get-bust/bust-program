@@ -55,13 +55,16 @@ pub struct UpdateLaunchConfig<'info> {
     pub config: Account<'info, Config>,
     #[account(mut, seeds = [LAUNCH_CONFIG_SEED], bump = launch_config.bump)]
     pub launch_config: Account<'info, LaunchConfig>,
-    #[account(token::mint = launch_config.quote_mint)]
+    /// The token fees arrive in. It can change with where $BUST trades; the swap account must hold the same token
+    pub quote_mint: InterfaceAccount<'info, token_interface::Mint>,
+    #[account(token::mint = quote_mint)]
     pub swap_destination: InterfaceAccount<'info, token_interface::TokenAccount>,
 }
 
 pub fn handle_update_launch_config(ctx: Context<UpdateLaunchConfig>, platform_config: Pubkey) -> Result<()> {
     let c = &mut ctx.accounts.launch_config;
     c.platform_config = platform_config;
+    c.quote_mint = ctx.accounts.quote_mint.key();
     c.swap_destination = ctx.accounts.swap_destination.key();
     Ok(())
 }

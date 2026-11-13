@@ -188,9 +188,46 @@ fn only_admin_configures_the_platform() {
             admin: attacker.pubkey(),
             config: config(),
             launch_config: launch_config(),
+            quote_mint: mint,
             swap_destination: theirs,
         }
         .to_account_metas(None),
     );
     expect_err(env.send(&[ix], &[&attacker]), "ConstraintHasOne");
+}
+
+#[test]
+fn admin_can_move_the_platform_to_another_quote_token() {
+    let mut env = Env::new();
+    let (mint, dest) = (env.mint, env.buyback_tokens);
+    init_launch(&mut env, DEVNET_LAUNCHPAD, mint, dest).unwrap();
+    let quote = token_2022_mint(&mut env);
+    let swap = token_2022_account(&mut env, &quote, &Pubkey::new_unique(), 0);
+    let admin = env.admin.insecure_clone();
+    let update = |quote_mint: Pubkey, swap_destination: Pubkey| {
+        Instruction::new_with_bytes(
+            bust::id(),
+            &bust::instruction::UpdateLaunchConfig { platform_config: Pubkey::new_unique() }.data(),
+            bust::accounts::UpdateLaunchConfig {
+                admin: admin.pubkey(),
+                config: config(),
+                launch_config: launch_config(),
+                quote_mint,
+                swap_destination,
+            }
+            .to_account_metas(None),
+        )
+    };
+    // The swap account must hold the new quote token
+    expect_err(env.send(&[update(quote, dest)], &[&admin]), "ConstraintTokenMint");
+    env.send(&[update(quote, swap)], &[&admin]).unwrap();
+    let c: bust::LaunchConfig = env.account(&launch_config());
+    assert_eq!((c.quote_mint, c.swap_destination), (quote, swap));
+
+    // Fees in the new token now leave the fee wallet; the old token no longer matches the config
+    let source = token_2022_account(&mut env, &quote, &fee_wallet(), 1_000_000);
+    sweep_with(&mut env, source, quote, Some(swap), anchor_spl::token_2022::ID).unwrap();
+    assert_eq!(env.token_balance(&swap), 1_000_000);
+    let old = env.token_account_of(&mint, &fee_wallet(), usdc(1.0));
+    assert!(sweep(&mut env, old, mint, None).is_err());
 }
