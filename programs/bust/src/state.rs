@@ -451,6 +451,9 @@ pub struct TokenFeeConfig {
     pub quote_mint: Pubkey,
     /// Where they go when that token is not USDC (the swap wallet's account), to be swapped to USDC and seeded
     pub swap_destination: Pubkey,
+    /// The operations account for the same token, and its share of every sweep (at most MAX_TOKEN_FEE_OPS_BPS)
+    pub ops_destination: Pubkey,
+    pub ops_bps: u16,
     pub bump: u8,
     pub fee_wallet_bump: u8,
 }

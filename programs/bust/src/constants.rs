@@ -43,6 +43,8 @@ pub const TOKEN_FEE_CONFIG_SEED: &[u8] = b"token_fee_config";
 /// it, and only to move a fee into the vault or to the registered swap account
 #[constant]
 pub const FEE_WALLET_SEED: &[u8] = b"fee_wallet";
+/// The most of a swept token fee that can go to operations (basis points). The rest always goes to the vault
+pub const MAX_TOKEN_FEE_OPS_BPS: u16 = 2_000;
 /// A user's deposit address: a PDA per owner; any USDC token account it owns is swept into that owner's balance
 #[constant]
 pub const DEPOSIT_SEED: &[u8] = b"deposit";

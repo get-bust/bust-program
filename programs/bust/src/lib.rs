@@ -123,15 +123,15 @@ pub mod bust {
     }
 
     // ---------- $BUST trading fees (they are paid to the fee wallet, a PDA of this program)
-    pub fn init_token_fee_config(ctx: Context<InitTokenFeeConfig>) -> Result<()> {
-        instructions::token_fees::handle_init_token_fee_config(ctx)
+    pub fn init_token_fee_config(ctx: Context<InitTokenFeeConfig>, ops_bps: u16) -> Result<()> {
+        instructions::token_fees::handle_init_token_fee_config(ctx, ops_bps)
     }
 
-    pub fn update_token_fee_config(ctx: Context<UpdateTokenFeeConfig>) -> Result<()> {
-        instructions::token_fees::handle_update_token_fee_config(ctx)
+    pub fn update_token_fee_config(ctx: Context<UpdateTokenFeeConfig>, ops_bps: u16) -> Result<()> {
+        instructions::token_fees::handle_update_token_fee_config(ctx, ops_bps)
     }
 
-    pub fn sweep_token_fees(ctx: Context<SweepTokenFees>) -> Result<()> {
+    pub fn sweep_token_fees<'info>(ctx: Context<'info, SweepTokenFees<'info>>) -> Result<()> {
         instructions::token_fees::handle_sweep_token_fees(ctx)
     }
 

@@ -82,7 +82,7 @@ Every account is a PDA of the program.
 | `EpochRecord` | `epoch`, epoch | an epoch's total net loss and its xBUST pool |
 | `EpochLoss` | `epoch_loss`, owner, epoch | one user's net result in one epoch |
 | `Vest` | `vest`, owner | a user's xBUST lock |
-| `TokenFeeConfig` | `token_fee_config` | the token $BUST trading fees arrive in, and the swap account |
+| `TokenFeeConfig` | `token_fee_config` | the token $BUST trading fees arrive in, the swap account, the operations account and its share |
 | fee wallet | `fee_wallet` | where $BUST trading fees are paid; nobody holds a key for it, the program signs for it |
 
 ## Instructions and who can call them
@@ -391,13 +391,16 @@ and their mint authorities are the relayer and the deployer. Nothing on mainnet 
 
 Fees on $BUST trading are paid to the program's `fee_wallet` PDA. Nobody holds a key for it.
 
-- `sweep_token_fees` moves what has arrived, and anyone can call it. USDC enters the vault as capital and raises
-  the high-water mark. Any other token goes to the registered swap account, to be swapped to USDC and seeded
-  back. Nothing else can receive it.
-- The fee wallet signs for that transfer and for nothing else. The program makes no call to another program on
-  its behalf.
-- The admin registers the token the fees arrive in and the swap account, and can change both. The fees can be
-  in an SPL Token or a Token-2022 token.
+- `sweep_token_fees` moves what has arrived, and anyone can call it. An operations share comes off first, paid
+  to the registered operations account in the same token. It is at most a fifth of the sweep
+  (`MAX_TOKEN_FEE_OPS_BPS`), rounded down, and can be zero.
+- The rest is the vault's. USDC enters the vault as capital and raises the high-water mark. Any other token goes
+  to the registered swap account, to be swapped to USDC and seeded back. Nothing else can receive it.
+- The fee wallet signs for those transfers and for nothing else. The program makes no call to another program
+  on its behalf.
+- The admin registers the token the fees arrive in, the swap account, the operations account and its share, and
+  can change them. The share can never be set above the cap. The fees can be in an SPL Token or a Token-2022
+  token.
 
 ## Economics
 

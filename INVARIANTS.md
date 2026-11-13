@@ -101,7 +101,7 @@ vault was larger. This is the price of I2.
 | A4 | Only the admin configures, and params stay within validated bounds | `only_admin_updates_config`, `config_rejects_invalid_params` |
 | A5 | Rent goes back only to whoever paid it | `rent_goes_back_only_to_whoever_paid_it` |
 | A6 | Nothing initialises twice | `nothing_initialises_twice`, `initialize_runs_once` |
-| A7 | A fee leaves the fee wallet only for the vault or the registered swap account, with the token program that owns it | `usdc_token_fees_enter_the_vault_as_capital`, `non_usdc_token_fees_go_only_to_the_swap_wallet`, `token_2022_fees_go_only_to_the_swap_wallet` |
+| A7 | A fee leaves the fee wallet only for the vault or the registered swap account, with the token program that owns it; operations take at most a fifth of it, to their registered account | `usdc_token_fees_enter_the_vault_as_capital`, `non_usdc_token_fees_go_only_to_the_swap_wallet`, `token_2022_fees_go_only_to_the_swap_wallet`, `operations_take_their_share_and_the_rest_is_capital`, `the_operations_share_is_capped_and_the_admin_can_lower_it` |
 | A8 | Pause locks no funds: close, liquidate and withdraw work while paused | `pause_locks_no_funds`, `pause_stops_new_positions_only` |
 
 ## What is not covered
