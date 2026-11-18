@@ -15,6 +15,19 @@ pub use state::*;
 
 declare_id!("BVYJzfEnjGqmrkqn6mzAfsUToJjmrkqt8TNEhK5wddiw");
 
+// Read by explorers and by researchers looking for a way to report a bug. Left out of CPI builds so that a program
+// depending on this crate does not carry a second copy.
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "Bust",
+    project_url: "https://getbust.trade",
+    contacts: "link:https://github.com/get-bust/bust-program/security/advisories/new,twitter:getbusttrade",
+    policy: "https://github.com/get-bust/bust-program/blob/main/SECURITY.md",
+    preferred_languages: "en",
+    source_code: "https://github.com/get-bust/bust-program",
+    auditors: "None"
+}
+
 /// Leveraged perpetuals traded against a USDC vault.
 #[program]
 pub mod bust {
